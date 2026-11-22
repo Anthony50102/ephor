@@ -163,7 +163,7 @@ func TestCreateProjectAndOrganize(t *testing.T) {
 	h.mustSee("Everything is sorted")
 
 	h.keys("h", "L")
-	h.mustSee("HAPPENING NOW", "billing fix", "ask for billing fix", "THREADS", "Docs")
+	h.mustSee("HAPPENING NOW", "billing fix", "ask for billing fix", "WORK IN MOTION", "Docs")
 }
 
 func TestNextNeedsYouCyclesAcrossScopesAndJumps(t *testing.T) {
@@ -209,12 +209,12 @@ func TestNewSinceLastVisit(t *testing.T) {
 	h.mustSee("1 new") // sidebar badge before opening
 
 	h.keys("L")
-	h.mustSee("RECENTLY FINISHED", "1 new since you last looked", "new Shipped the fix.")
+	h.mustSee("Since you last looked", "new Shipped the fix.")
 	if !h.m.st.Project(pid).LastViewed.Equal(now) {
 		t.Fatal("opening a project should record the visit")
 	}
 	h.keys("g", "g", "L") // leave for the overview, then come back
-	if strings.Contains(h.screen(), "new since you last looked") {
+	if strings.Contains(h.screen(), "Since you last looked") || !strings.Contains(h.screen(), "Recently finished") {
 		t.Fatal("new markers should clear after a visit")
 	}
 }
@@ -342,6 +342,18 @@ func TestVimKeys(t *testing.T) {
 	}
 }
 
+func TestNeedsYouCard(t *testing.T) {
+	s := session("a", "alpha", agents.NeedsYou, time.Minute, 1)
+	s.Info.Reason = "Pick a retry policy."
+	h := newHarness(t, []core.Session{s}, true)
+	h.seedProject("Alpha", "a", now)
+	h.keys("L")
+	h.mustSee("NEEDS YOU", "Pick a retry policy.", "]d selects it")
+	if strings.Contains(h.screen(), "Nothing is running") {
+		t.Fatal("an empty happening card should give way to the needs-you card")
+	}
+}
+
 func TestSummaries(t *testing.T) {
 	ss := []core.Session{session("k1", "worker", agents.Working, time.Minute, 1)}
 	h := newHarness(t, ss, true)
@@ -351,7 +363,8 @@ func TestSummaries(t *testing.T) {
 		if fail {
 			return "", errors.New("offline")
 		}
-		return fmt.Sprintf(`{"now":"The team is shipping release %d.","purpose":"Ship releases","sessions":{"S1":"Cutting the build"}}`, calls), nil
+		n := calls
+		return fmt.Sprintf(`{"headline":"Release %d is going out","now":"The team is shipping release %d.","next":"Tag the build once tests pass.","purpose":"Ship releases","sessions":{"S1":"Cutting the build"}}`, n, n), nil
 	}
 	h.m.opt.SummaryPath = filepath.Join(t.TempDir(), "summaries.json")
 	p := h.seedProject("app", "k1", now)
@@ -368,7 +381,7 @@ func TestSummaries(t *testing.T) {
 		t.Fatal("nothing changed, so nothing should be rewritten")
 	}
 	h.keys("L")
-	h.mustSee("shipping release 1", "Cutting the build", "Probably: Ship releases")
+	h.mustSee("Release 1 is going out", "shipping release 1", "NEXT UP", "Tag the build once tests pass.", "WORK IN MOTION", "Cutting the build", "Probably: Ship releases")
 	if got := summary.LoadCache(h.m.opt.SummaryPath).Projects[p.ID].Now; got != "The team is shipping release 1." {
 		t.Fatalf("cache = %q", got)
 	}

@@ -105,6 +105,8 @@ edit, and every refresh picks up edits made elsewhere.
 
 Each project gets a short, plain-language "happening now" paragraph, written
 for someone who knows the project but not the code, plus one line per session.
+The summary also carries a bold headline for the card, and a "next up" step
+when the agents' own messages make one clear.
 If a project has no description, the model also suggests one (`e` to accept or
 edit).
 

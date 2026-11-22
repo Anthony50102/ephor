@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/anthonypoole/switchboard/internal/agents"
 	"github.com/charmbracelet/lipgloss"
@@ -11,6 +12,8 @@ import (
 // Tokyo Night Moon, matching the user's Neovim colorscheme.
 var (
 	cDeep      = lipgloss.Color("#191b29")
+	cPanel     = lipgloss.Color("#1e2030") // side panels and bars
+	cBg        = lipgloss.Color("#222436") // the brief
 	cRaised    = lipgloss.Color("#2f334d")
 	cLine      = lipgloss.Color("#3b4261")
 	cSubtle    = lipgloss.Color("#636da6")
@@ -44,6 +47,7 @@ var (
 	sKey     = lipgloss.NewStyle().Foreground(cBlue).Bold(true)
 	sNewTag  = lipgloss.NewStyle().Foreground(cDeep).Background(cMagenta).Bold(true)
 	sBadge   = lipgloss.NewStyle().Foreground(cDeep).Background(cAmber).Bold(true)
+	sPill    = lipgloss.NewStyle().Foreground(cMagenta).Background(cRaised)
 	sSel     = lipgloss.NewStyle().Background(cSelection)
 	sSelDim  = lipgloss.NewStyle().Background(cRaised)
 	sBrand   = lipgloss.NewStyle().Foreground(cDeep).Background(cMagenta).Bold(true)
@@ -77,14 +81,6 @@ func dot(s agents.State) string {
 
 func stateWord(s agents.State) string {
 	return stateColor(s).Render(s.String())
-}
-
-// accent draws a block with a colored bar on its left edge.
-func accent(c lipgloss.Color, w int, body string) []string {
-	st := lipgloss.NewStyle().
-		Border(lipgloss.ThickBorder(), false, false, false, true).
-		BorderForeground(c).PaddingLeft(1).Width(w - 1)
-	return strings.Split(st.Render(body), "\n")
 }
 
 // wrap word-wraps plain or styled text to w columns.
@@ -147,3 +143,70 @@ func spread(left, right string, w int) string {
 }
 
 func rule(w int) string { return sLine.Render(strings.Repeat("─", w)) }
+
+var bgSeqs sync.Map
+
+// bgSeq is the escape sequence that sets background c, or "" when the
+// terminal has no color.
+func bgSeq(c lipgloss.Color) string {
+	if v, ok := bgSeqs.Load(c); ok {
+		return v.(string)
+	}
+	r := lipgloss.NewStyle().Background(c).Render("x")
+	seq := ""
+	if i := strings.Index(r, "x"); i > 0 {
+		seq = r[:i]
+	}
+	bgSeqs.Store(c, seq)
+	return seq
+}
+
+// paint gives an already styled line a background that survives the
+// resets inside it. Later paints win, so a card painted first keeps its
+// own color inside a painted panel.
+func paint(s string, c lipgloss.Color) string {
+	open := bgSeq(c)
+	if open == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\x1b[m", "\x1b[0m")
+	s = strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m"+open)
+	s = strings.ReplaceAll(s, "\x1b[49m", open)
+	return open + s + "\x1b[0m"
+}
+
+// card is a raised block with a colored bar down its left edge. Content
+// lines should fit in w-4 columns.
+func card(c lipgloss.Color, w int, lines []string) []string {
+	bar := lipgloss.NewStyle().Foreground(c).Render("▌")
+	blank := bar + paint(strings.Repeat(" ", w-1), cRaised)
+	out := []string{blank}
+	for _, l := range lines {
+		out = append(out, bar+paint(pad("  "+l, w-2)+" ", cRaised))
+	}
+	return append(out, blank)
+}
+
+// frame is a bordered card. Content lines should fit in w-4 columns; h of
+// 0 fits the content.
+func frame(c lipgloss.Color, w, h int, lines []string) []string {
+	st := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c).Padding(0, 1).Width(w - 2)
+	if h > 2 {
+		st = st.Height(h - 2)
+	}
+	return strings.Split(st.Render(strings.Join(lines, "\n")), "\n")
+}
+
+// sideBySide joins two blocks of width w each with a gap.
+func sideBySide(a, b []string, w, gap int) []string {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	a, b = box(a, w, n), box(b, w, n)
+	out := make([]string, n)
+	for i := range out {
+		out[i] = a[i] + strings.Repeat(" ", gap) + b[i]
+	}
+	return out
+}

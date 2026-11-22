@@ -17,7 +17,7 @@ func input() Input {
 }
 
 func TestParseMapsLabelsAndTidies(t *testing.T) {
-	out := "Sure:\n```json\n" + `{"now":"S1 is training — S2's run is done. S9 is not real.",` +
+	out := "Sure:\n```json\n" + `{"headline":"S1 trains","now":"S1 is training — S2's run is done. S9 is not real.","next":"Review S2",` +
 		`"purpose":"Train a model","sessions":{"S1":"Training — almost done","S2":"Finished","S7":"ghost","x":"bad"}}` + "\n```"
 	s, err := Parse(out, input())
 	if err != nil {
@@ -25,6 +25,9 @@ func TestParseMapsLabelsAndTidies(t *testing.T) {
 	}
 	if s.Now != `"thinker" is training - "gpu"'s run is done. S9 is not real.` {
 		t.Fatalf("now = %q", s.Now)
+	}
+	if s.Headline != `"thinker" trains` || s.Next != `Review "gpu"` {
+		t.Fatalf("headline/next = %q / %q", s.Headline, s.Next)
 	}
 	if s.Purpose != "Train a model" || len(s.Sessions) != 2 || s.Sessions["a"] != "Training - almost done" || s.Sessions["b"] != "Finished" {
 		t.Fatalf("summary = %+v", s)

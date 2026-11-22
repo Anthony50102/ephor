@@ -240,7 +240,13 @@ func summarize(src core.Sources, st *store.State, run summary.Runner, check clou
 	if err != nil {
 		return err
 	}
+	if sum.Headline != "" {
+		fmt.Print(sum.Headline, "\n\n")
+	}
 	fmt.Println(sum.Now)
+	if sum.Next != "" {
+		fmt.Println("\nNext up:", sum.Next)
+	}
 	if sum.Purpose != "" {
 		fmt.Println("\nProbably for:", sum.Purpose)
 	}

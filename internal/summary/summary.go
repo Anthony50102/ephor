@@ -43,7 +43,9 @@ type SessionInput struct {
 
 // Summary is one generated note.
 type Summary struct {
+	Headline string            `json:"headline,omitempty"` // the gist in a few words
 	Now      string            `json:"now"`
+	Next     string            `json:"next,omitempty"`     // the next step, if clear
 	Purpose  string            `json:"purpose,omitempty"`  // suggested when the user wrote none
 	Sessions map[string]string `json:"sessions,omitempty"` // session key to one line
 	At       time.Time         `json:"at"`
@@ -103,11 +105,14 @@ func Prompt(in Input, now time.Time) string {
 The reader knows what the project is about at a high level, like a manager, but not the code.
 
 Reply with only a JSON object, no code fence:
-{"now": "...", "purpose": "...", "sessions": {"S1": "...", "S2": "..."}}
+{"headline": "...", "now": "...", "next": "...", "purpose": "...", "sessions": {"S1": "...", "S2": "..."}}
+
+- headline: the gist in five to ten words, like a news headline, for example "Training data is ready. Config decision pending." No trailing period needed for a single phrase.
 
 - now: two or three plain sentences. Say what the work is trying to achieve right now and where it stands. If a session is waiting on the user, say that first and say what it needs. Prefer outcomes over mechanics. Avoid file names, function names, and jargon unless they are essential. Present tense. Do not use em dashes.
+- next: one short sentence on the next step, if the facts make it clear. Otherwise "".
 - purpose: if the project has no stated purpose, one sentence on what the project is for. Otherwise "".
-- In "now" and "purpose", never write session labels like S1. The reader cannot see them. Describe the work instead, or name a session by its quoted title if you must.
+- In "headline", "now", "next", and "purpose", never write session labels like S1. The reader cannot see them. Describe the work instead, or name a session by its quoted title if you must.
 - sessions: for every session label, at most twelve words on what it is doing or just finished.
 - Mention cloud resources only when they explain what is happening, for example a training job on a cluster or a VM that was just created.
 - Use only the facts below. If they are thin, say less rather than guess.
@@ -166,7 +171,9 @@ func Parse(out string, in Input) (Summary, error) {
 		return Summary{}, fmt.Errorf("no JSON in reply: %s", clip(out, 120))
 	}
 	var raw struct {
+		Headline string            `json:"headline"`
 		Now      string            `json:"now"`
+		Next     string            `json:"next"`
 		Purpose  string            `json:"purpose"`
 		Sessions map[string]string `json:"sessions"`
 	}
@@ -176,7 +183,8 @@ func Parse(out string, in Input) (Summary, error) {
 	if strings.TrimSpace(raw.Now) == "" {
 		return Summary{}, errors.New("reply had no summary")
 	}
-	s := Summary{Now: unlabel(tidy(raw.Now), in), Sessions: map[string]string{}}
+	s := Summary{Headline: unlabel(tidy(raw.Headline), in), Now: unlabel(tidy(raw.Now), in),
+		Next: unlabel(tidy(raw.Next), in), Sessions: map[string]string{}}
 	if in.Purpose == "" {
 		s.Purpose = unlabel(tidy(raw.Purpose), in)
 	}

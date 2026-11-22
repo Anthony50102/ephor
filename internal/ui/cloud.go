@@ -204,9 +204,9 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []strin
 	case m.liveBusy:
 		sub += " · checking with Azure…"
 	}
-	lines := []string{"", section("CLOUD", sub)}
+	lines := []string{"", section("INFRASTRUCTURE", sub)}
 	if compact {
-		lines[1] = section("CLOUD", "")
+		lines[1] = sKicker.Render("CLOUD")
 	}
 	nameW := 0
 	for i, r := range rows {
