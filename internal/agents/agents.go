@@ -1,0 +1,159 @@
+// Package agents reads Copilot CLI and Claude Code session state from disk.
+package agents
+
+import (
+	"bytes"
+	"errors"
+	"io"
+	"os"
+	"strings"
+	"time"
+)
+
+// State is what a session is doing from the user's point of view.
+type State int
+
+// States are ordered from least to most urgent so rollups can take the max.
+const (
+	Unknown  State = iota
+	Ended          // process gone or session shut down
+	Quiet          // finished, and nothing has happened for a long time
+	Ready          // finished a turn; waiting for the next instruction
+	Working        // a turn is in progress
+	NeedsYou       // blocked on a question or permission prompt
+)
+
+func (s State) String() string {
+	switch s {
+	case Ended:
+		return "ended"
+	case Quiet:
+		return "quiet"
+	case Ready:
+		return "ready"
+	case Working:
+		return "working"
+	case NeedsYou:
+		return "needs you"
+	}
+	return "unknown"
+}
+
+// Result is a finished piece of work, such as a task_complete summary.
+type Result struct {
+	At   time.Time
+	Text string
+}
+
+// Info is what Switchboard knows about one agent session.
+type Info struct {
+	Kind      string
+	ID        string
+	Name      string
+	Cwd       string
+	Repo      string
+	Branch    string
+	State     State
+	Reason    string // why it needs you, for example the pending question
+	Ask       string // latest instruction typed by the user
+	AskAt     time.Time
+	Results   []Result // newest first
+	UpdatedAt time.Time
+}
+
+const (
+	maxResults   = 5
+	maxScanBytes = 24 << 20
+	maxLineBytes = 16 << 20
+)
+
+// chunkSize is a variable so tests can exercise lines that span chunks.
+var chunkSize = 1 << 20
+
+// scanBackward calls fn for each complete line of path, newest first, until fn
+// returns false or limit bytes have been read.
+func scanBackward(path string, limit int64, fn func(line []byte) bool) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	off := st.Size()
+	var carry []byte
+	var read int64
+	for off > 0 && read < limit {
+		n := int64(chunkSize)
+		if n > off {
+			n = off
+		}
+		off -= n
+		read += n
+		buf := make([]byte, n, int(n)+len(carry))
+		if _, err := f.ReadAt(buf, off); err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		buf = append(buf, carry...)
+		for {
+			i := bytes.LastIndexByte(buf, '\n')
+			if i < 0 {
+				break
+			}
+			line := buf[i+1:]
+			buf = buf[:i]
+			if len(bytes.TrimSpace(line)) > 0 && !fn(line) {
+				return nil
+			}
+		}
+		carry = buf
+		if len(carry) > maxLineBytes {
+			carry = nil // pathological line; skip it rather than grow without bound
+		}
+	}
+	if off == 0 && len(bytes.TrimSpace(carry)) > 0 {
+		fn(carry)
+	}
+	return nil
+}
+
+// eventType reads the leading "type" field without decoding the whole line.
+func eventType(line []byte) string {
+	const p = `{"type":"`
+	if !bytes.HasPrefix(line, []byte(p)) {
+		return ""
+	}
+	rest := line[len(p):]
+	if i := bytes.IndexByte(rest, '"'); i >= 0 {
+		return string(rest[:i])
+	}
+	return ""
+}
+
+// oneLine collapses whitespace and trims to n runes.
+func oneLine(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if n > 0 && len(r) > n {
+		return strings.TrimSpace(string(r[:n-1])) + "…"
+	}
+	return s
+}
+
+// FirstSentence returns the first line or sentence of s, for headlines.
+func FirstSentence(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, "\n"); i > 0 {
+		s = s[:i]
+	}
+	s = strings.TrimLeft(s, "#*- ")
+	for _, sep := range []string{". ", "? ", "! "} {
+		if i := strings.Index(s, sep); i > 20 {
+			s = s[:i+1]
+			break
+		}
+	}
+	return oneLine(strings.ReplaceAll(s, "**", ""), n)
+}

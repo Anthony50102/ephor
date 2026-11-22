@@ -1,0 +1,91 @@
+# Switchboard
+
+A keyboard-first control panel for the GitHub Copilot CLI and Claude Code
+sessions you run in tmux. It answers three questions without making you scroll
+through every window:
+
+- **What needs me?** Sessions waiting on a question or an approval.
+- **What is moving, and why?** Projects, what each one is for, and what its
+  sessions are working on right now.
+- **What finished?** Recent results, with markers for anything new since you
+  last looked.
+
+Works on Linux and macOS. It only reads state; it never types into your agents.
+
+## Install
+
+Requires Go 1.24+ and tmux 3.2+.
+
+```sh
+go build -o ~/.local/bin/switchboard ./cmd/switchboard
+```
+
+Optional tmux binding that opens the panel in its own window, or returns to it
+if it is already open:
+
+```tmux
+bind-key S new-window -S -n switchboard switchboard
+```
+
+## Use
+
+```sh
+switchboard          # open the panel
+switchboard list     # print sessions as a table
+switchboard list --json
+```
+
+New sessions appear in **Unassigned**. Create a project with `N`, describe it
+with `e`, then select a session and press `o` to place it (or `a` to accept a
+suggestion). Inside tmux, `enter` switches your client to the session's window;
+outside tmux it attaches.
+
+| Key | Action |
+| --- | --- |
+| `j` / `k` | move in the focused list |
+| `tab`, `h`, `l` | switch between projects and sessions |
+| `[` / `]` | previous / next project |
+| `n` | next session that needs you |
+| `enter` | jump to the session's tmux window |
+| `o` / `a` | organize / accept suggestion |
+| `N` `t` `e` `R` `D` | new project, new thread, describe, rename, delete |
+| `/` | filter sessions (`esc` clears) |
+| `?` | all keys and colors |
+
+Colors are fixed in meaning: amber needs you, green is working, cyan is
+finished and ready for your next instruction, hollow is quiet (nothing new in a
+day). The palette is Tokyo Night Moon.
+
+## How it works
+
+Every 3 seconds Switchboard lists tmux panes, walks each pane's process tree to
+find `copilot` or `claude`, and reads that agent's own session files.
+
+- **Copilot CLI.** Each running process holds
+  `~/.copilot/session-state/<id>/inuse.<pid>.lock`, which ties the process to
+  its session. State comes from the tail of `events.jsonl`: an unanswered
+  `permission.requested` or `ask_user` means it needs you, a finished turn
+  means ready, anything else in flight means working. Logs can be gigabytes,
+  so they are read backward from the end and cached until they change.
+- **Claude Code.** Transcripts live in `~/.claude/projects/<encoded cwd>/`.
+  When exactly one Claude process runs in a directory, Switchboard uses the
+  newest transcript written since that process started. Approval prompts are
+  not logged, so it also checks the bottom of the pane for a prompt.
+
+Sessions are identified by the agent's session ID, not the tmux window, so a
+session keeps its project when you resume it somewhere else. Sessions without
+a known ID fall back to their tmux pane.
+
+Projects, threads, and assignments are stored in
+`$XDG_STATE_HOME/switchboard/state.json` (default
+`~/.local/state/switchboard/state.json`). Use `--state` to point elsewhere.
+If the file cannot be parsed, Switchboard exits rather than overwrite it. You can run several
+panels at once: each edit locks the file, rereads it, and applies only that
+edit, and every refresh picks up edits made elsewhere.
+
+## Not yet
+
+- Plain-language project summaries. Today the brief shows the latest ask and
+  the agents' own completion summaries; generated summaries come next.
+- Cloud resources (AKS, VMs) per project.
+- Starting new agent sessions from the panel.
