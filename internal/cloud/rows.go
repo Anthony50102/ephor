@@ -11,6 +11,57 @@ import (
 type Row struct {
 	Resource
 	Detail string // for clusters: namespaces and workloads
+	Live   *Live  // nil when Azure was not asked
+}
+
+// Gone is true when the resource no longer exists, by the logs or by Azure.
+func (r Row) Gone() bool {
+	if r.Live != nil {
+		return !r.Live.Found
+	}
+	return r.Deleted
+}
+
+// Billing is true when Azure says it is running or holding hardware.
+func (r Row) Billing() bool {
+	return r.Live != nil && (r.Live.State == "running" || strings.HasPrefix(r.Live.State, "stopped,"))
+}
+
+// Status is the most useful word for the row: the live state when known,
+// else what the agent last did.
+func (r Row) Status() string {
+	if r.Live == nil {
+		return r.Resource.Status()
+	}
+	switch {
+	case r.Deleted && r.Live.Found:
+		return "delete failed?"
+	case r.Live.Found && r.Live.State == "":
+		return r.Resource.Status()
+	}
+	return r.Live.Word()
+}
+
+// Where is the detail column: size and workloads, else the resource group.
+func (r Row) Where() string {
+	var parts []string
+	if r.Live != nil && r.Live.Size != "" {
+		parts = append(parts, r.Live.Size)
+	}
+	if r.Detail != "" {
+		parts = append(parts, r.Detail)
+	} else if g := r.Group(); g != "" {
+		parts = append(parts, g)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// Group is the real resource group when Azure said, else the logged scope.
+func (r Row) Group() string {
+	if r.Live != nil && r.Live.Group != "" && r.Kind != "Resource group" {
+		return r.Live.Group
+	}
+	return r.Scope
 }
 
 // minor resources are plumbing. They are counted, not listed.
@@ -28,7 +79,7 @@ func minor(r Resource) string {
 
 // Rows turns merged resources into display rows, most relevant first, and a
 // note about what was left out.
-func Rows(rs []Resource) ([]Row, string) {
+func Rows(rs []Resource, live map[string]Live) ([]Row, string) {
 	type work struct {
 		kinds map[string]int
 		last  Resource
@@ -54,7 +105,11 @@ func Rows(rs []Resource) ([]Row, string) {
 			hidden[m]++
 			continue
 		}
-		rows = append(rows, Row{Resource: r})
+		row := Row{Resource: r}
+		if l, ok := live[r.ID()]; ok {
+			row.Live = &l
+		}
+		rows = append(rows, row)
 	}
 	for i := range rows {
 		r := &rows[i]
@@ -85,9 +140,21 @@ func Rows(rs []Resource) ([]Row, string) {
 		}
 		r.Detail = strings.Join(parts, " · ")
 	}
+	rows = foldAKS(rows)
+	// Whatever is costing money comes first, however old; then recent
+	// work; then what no longer exists.
+	tier := func(r Row) int {
+		switch {
+		case r.Billing() || r.Status() == "delete failed?":
+			return 0
+		case r.Gone():
+			return 2
+		}
+		return 1
+	}
 	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].Deleted != rows[j].Deleted {
-			return !rows[i].Deleted
+		if ti, tj := tier(rows[i]), tier(rows[j]); ti != tj {
+			return ti < tj
 		}
 		return rows[i].Last.After(rows[j].Last)
 	})
@@ -104,15 +171,79 @@ func Rows(rs []Resource) ([]Row, string) {
 	return rows, strings.Join(notes, ", ")
 }
 
+// foldAKS merges a kubectl cluster into the AKS cluster of the same name, so
+// one cluster is one row whether the agent reached it by az or kubectl.
+func foldAKS(rows []Row) []Row {
+	aks := map[string]int{}
+	for i, r := range rows {
+		if r.Kind == "AKS cluster" {
+			aks[strings.ToLower(r.Name)] = i
+		}
+	}
+	drop := map[int]bool{}
+	for i := range rows {
+		k := &rows[i]
+		j, ok := aks[strings.ToLower(k.Name)]
+		if k.Kind != "Kubernetes" || !ok {
+			continue
+		}
+		a := rows[j]
+		drop[j] = true
+		k.Kind = "AKS cluster"
+		k.Created = k.Created || a.Created
+		k.Deleted = a.Deleted && !a.Last.Before(k.Last)
+		k.Count += a.Count
+		k.By = union(k.By, a.By)
+		if a.Last.After(k.Last) {
+			k.Last = a.Last
+		}
+		if a.First.Before(k.First) {
+			k.First = a.First
+		}
+		if a.Live != nil {
+			k.Live = a.Live
+		}
+	}
+	if len(drop) == 0 {
+		return rows
+	}
+	out := rows[:0:0]
+	for i, r := range rows {
+		if !drop[i] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func union(a, b []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range append(append([]string{}, a...), b...) {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Line is a short description of a row for the summarizer.
 func (r Row) Line() string {
 	s := r.Kind + " " + r.Name
-	if r.Detail != "" {
-		s += " (" + r.Detail + ")"
-	} else if r.Scope != "" {
-		s += " in " + r.Scope
+	if w := r.Where(); w != "" {
+		s += " (" + w + ")"
 	}
-	return s + ", " + r.Status()
+	s += ", " + r.Resource.Status() + " by an agent"
+	if r.Live != nil {
+		now := r.Status()
+		if now == r.Resource.Status() {
+			now = "exists"
+		}
+		s += ", Azure says now: " + now
+	}
+	return s
 }
 
 func plural(n int, word string) string {

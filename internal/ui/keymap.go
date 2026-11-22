@@ -44,6 +44,7 @@ const (
 	aRefresh
 	aCommand
 	aSummarize
+	aCheckCloud
 )
 
 var normalKeys = map[string]action{
@@ -79,6 +80,7 @@ var prefixes = map[string][]keyHint{
 		{"m", "move session to a project", aMove},
 		{"a", "accept suggestion", aAccept},
 		{"s", "rewrite project summary", aSummarize},
+		{"c", "check cloud resources with Azure", aCheckCloud},
 		{"u", "refresh", aRefresh},
 		{"?", "all keys", aHelp},
 		{"q", "quit", aQuit},
@@ -227,6 +229,19 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		m.startInput(inCommand, "", "", "", "")
 	case aSummarize:
 		return m, m.forceSummary()
+	case aCheckCloud:
+		switch {
+		case m.opt.CheckLive == nil:
+			m.setErr(fmt.Errorf("Azure checks are off (see --live)"))
+		case m.liveBusy:
+			m.setStatus("Already checking with Azure.")
+		default:
+			if cmd := m.maybeCheckLive(true); cmd != nil {
+				m.setStatus("Checking cloud resources with Azure…")
+				return m, cmd
+			}
+			m.setStatus("No Azure resources to check.")
+		}
 	}
 	return m, nil
 }

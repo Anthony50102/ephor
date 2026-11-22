@@ -85,6 +85,10 @@ type Options struct {
 	// memory only.
 	CloudPath string
 	NoCloud   bool
+
+	// CheckLive asks Azure whether the resources still exist; nil skips it.
+	CheckLive cloud.Checker
+	LiveEvery time.Duration
 }
 
 // Model is the Bubble Tea model.
@@ -128,6 +132,11 @@ type Model struct {
 	cloudIx   *cloud.Index // used only by the scan in flight
 	cloudBusy bool
 	cloudRes  map[string][]cloud.Resource // by session log
+	cloudLive map[string]cloud.Live       // by resource ID; nil until Azure answers
+	liveBusy  bool
+	liveAt    time.Time // when the last check started
+	liveKeys0 string    // the resources it asked about
+	liveErr   string
 
 	viewedPID string
 	newSince  map[string]time.Time
@@ -155,6 +164,9 @@ func New(opt Options) Model {
 	ti.CharLimit = 400
 	if opt.SummaryEvery == 0 {
 		opt.SummaryEvery = DefaultSummaryEvery
+	}
+	if opt.LiveEvery == 0 {
+		opt.LiveEvery = DefaultLiveEvery
 	}
 	m := Model{opt: opt, st: opt.Store, input: ti, newSince: map[string]time.Time{}, width: 120, height: 40}
 	m.sums = &summary.Cache{Projects: map[string]summary.Summary{}}
@@ -445,6 +457,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cloudMsg:
 		m.cloudBusy = false
 		m.cloudRes = msg.res
+		return m, m.maybeCheckLive(false)
+	case liveMsg:
+		m.gotLive(msg)
 		return m, nil
 	case tickMsg:
 		cmds := []tea.Cmd{tick()}

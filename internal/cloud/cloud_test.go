@@ -123,7 +123,7 @@ func TestMergeAndRows(t *testing.T) {
 		{Kind: "VM", Name: "old", Created: true, Last: at(2), Count: 1}, // older than the delete
 	}
 	merged := Merge(map[string][]Resource{"alpha": a, "beta": b})
-	rows, note := Rows(merged)
+	rows, note := Rows(merged, nil)
 	var got []string
 	for _, r := range rows {
 		got = append(got, fmt.Sprintf("%s %s [%s] %s %s", r.Kind, r.Name, r.Detail, r.Status(), strings.Join(r.By, ",")))
@@ -141,5 +141,85 @@ func TestMergeAndRows(t *testing.T) {
 	}
 	if note != "1 network resource" {
 		t.Fatalf("note = %q", note)
+	}
+
+	// The same cluster reached by az and by kubectl is one row.
+	rows, _ = Rows(Merge(map[string][]Resource{
+		"alpha": {{Kind: "AKS cluster", Name: "AKS1", Scope: "rg", Created: true, Last: at(1), Count: 1}},
+		"beta":  {{Kind: "Kubernetes", Name: "aks1", Scope: "training", Last: at(3), Count: 2}},
+	}), nil)
+	if len(rows) != 1 || rows[0].Kind != "AKS cluster" || !rows[0].Created || rows[0].Count != 3 || !rows[0].Last.Equal(at(3)) || len(rows[0].By) != 2 {
+		t.Fatalf("folded rows = %+v", rows)
+	}
+}
+
+func TestLive(t *testing.T) {
+	rs := []Resource{
+		{Kind: "VM", Name: "gpu", Scope: "rg-a", Created: true},
+		{Kind: "VM", Name: "old", Deleted: true},
+		{Kind: "Storage account", Name: "gonestore", Created: true},
+		{Kind: "Resource group", Name: "rg-a", Created: true},
+		{Kind: "Kubernetes", Name: "kubeconfig-ring1"},
+		{Kind: "Kubernetes", Name: "aks1"},
+		{Kind: "VM", Name: "x') | union (Resources"}, // never reaches the query
+		{Kind: "SSH host", Name: "10.0.0.1"},
+	}
+	q := Query(rs)
+	if strings.Contains(q, "union (Resources") || !strings.Contains(q, "'gpu'") || !strings.Contains(q, "ResourceContainers") {
+		t.Fatalf("query = %s", q)
+	}
+	reply := `{"data":[
+		{"name":"GPU","type":"microsoft.compute/virtualmachines","resourceGroup":"rg-b","vmSize":"Standard_ND96","power":"PowerState/running"},
+		{"name":"gpu","type":"microsoft.compute/virtualmachines","resourceGroup":"rg-a","vmSize":"Standard_ND40","power":"PowerState/stopped"},
+		{"name":"old","type":"microsoft.compute/virtualmachines","resourceGroup":"rg-a","power":"PowerState/deallocated"},
+		{"name":"rg-a","type":"microsoft.resources/subscriptions/resourcegroups","resourceGroup":"rg-a"},
+		{"name":"aks1","type":"microsoft.containerservice/managedclusters","resourceGroup":"rg-k","power":"Running",
+		 "pools":[{"name":"sys","count":2,"vmSize":"Standard_D4as_v5","mode":"System","powerState":{"code":"Running"}},
+		          {"name":"gpu","count":0,"vmSize":"Standard_NC24","mode":"User","powerState":{"code":"Running"}},
+		          {"name":"nap","mode":"Machines","powerState":{"code":"Running"}}]}]}`
+	live, err := Match(rs, []byte(reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(r Resource) string {
+		l, ok := live[r.ID()]
+		if !ok {
+			return "unchecked"
+		}
+		return fmt.Sprintf("%s|%s|%s", l.Word(), l.Size, l.Group)
+	}
+	want := []string{
+		"stopped, still billed|ND40|rg-a", // the copy in the logged group wins
+		"deallocated||rg-a",
+		"gone||",
+		"exists||rg-a",
+		"unchecked", // a kubeconfig name that is not an AKS name proves nothing
+		"running|2× D4as_v5 + auto nodes|rg-k",
+		"unchecked",
+		"unchecked",
+	}
+	for i, r := range rs {
+		if got := get(r); got != want[i] {
+			t.Errorf("%s %s: got %q, want %q", r.Kind, r.Name, got, want[i])
+		}
+	}
+
+	rows, _ := Rows(rs[:4], live)
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.Name+" "+r.Status())
+	}
+	if w := "gpu stopped, still billed|old delete failed?|rg-a created|gonestore gone"; strings.Join(got, "|") != w {
+		t.Fatalf("rows = %q, want %q", strings.Join(got, "|"), w)
+	}
+	if l := rows[2].Line(); l != "Resource group rg-a, created by an agent, Azure says now: exists" {
+		t.Fatalf("line = %q", l)
+	}
+
+	// A full page may be missing matches, so nothing is called gone.
+	page := `{"data":[` + strings.TrimSuffix(strings.Repeat(`{"name":"z","type":"t"},`, pageSize), ",") + `]}`
+	live, _ = Match(rs, []byte(page))
+	if _, ok := live[rs[2].ID()]; ok {
+		t.Fatal("a truncated reply must not mark anything gone")
 	}
 }

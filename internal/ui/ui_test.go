@@ -411,7 +411,44 @@ func TestCloudSection(t *testing.T) {
 	h.mustSee("VM gpu-box", "k8s aks1")
 
 	in := h.m.summaryInput(h.m.scope().pid)
-	if len(in.Cloud) != 2 || in.Cloud[0] != "VM gpu-box in rg-ml, created" {
+	if len(in.Cloud) != 2 || in.Cloud[0] != "VM gpu-box (rg-ml), created by an agent" {
 		t.Fatalf("summary input cloud = %q", in.Cloud)
 	}
+
+	// Azure says the VM still runs, in another group, and the deleted one
+	// survived. Both rise to the top.
+	asked := ""
+	h.m.opt.CheckLive = func(_ context.Context, q string) ([]byte, error) {
+		asked = q
+		return []byte(`{"data":[
+			{"name":"gpu-box","type":"Microsoft.Compute/virtualMachines","resourceGroup":"rg-real","vmSize":"Standard_NC24ads_A100_v4","power":"PowerState/running"},
+			{"name":"old-box","type":"microsoft.compute/virtualmachines","resourceGroup":"rg-ml","vmSize":"Standard_D4s_v5","power":"PowerState/deallocated"}]}`), nil
+	}
+	h.keys("H")
+	h.cmd = nil
+	h.keys("space", "c")
+	if h.cmd == nil || !strings.Contains(h.cmd().(liveMsg).keys, "gpu-box") {
+		t.Fatal("space c should check with Azure")
+	}
+	h.keys("space", "c")
+	h.mustSee("Already checking")
+	h.m.liveBusy = false
+	h.cmd = nil
+	h.keys("space", "c")
+	h.send(h.cmd())
+	if !strings.Contains(asked, "'gpu-box'") || strings.Contains(asked, "'aks1'") == false {
+		t.Fatalf("query = %s", asked)
+	}
+	h.mustSee("checked with Azure", "running · created 1h", "NC24ads_A100_v4 · rg-real", "delete failed? · deleted 3h")
+	in = h.m.summaryInput(h.m.scope().pid)
+	if in.Cloud[0] != "VM gpu-box (NC24ads_A100_v4 · rg-real), created by an agent, Azure says now: running" {
+		t.Fatalf("summary input cloud = %q", in.Cloud)
+	}
+
+	// A failed check keeps the last answer and says so.
+	h.m.opt.CheckLive = func(context.Context, string) ([]byte, error) { return nil, fmt.Errorf("not logged in") }
+	h.cmd = nil
+	h.keys("space", "c")
+	h.send(h.cmd())
+	h.mustSee("Azure check failed", "running · created 1h")
 }

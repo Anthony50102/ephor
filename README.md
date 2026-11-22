@@ -35,7 +35,7 @@ switchboard list     # print sessions as a table
 switchboard list --json
 switchboard summarize nabu            # write one project's summary now
 switchboard summarize --dry-run nabu  # print the prompt the model would see
-switchboard cloud nabu                # every cloud resource the project's sessions touched
+switchboard cloud nabu                # every cloud resource the project's sessions touched, checked with Azure
 ```
 
 New sessions appear in **Unassigned**. Create a project with `n`, describe it
@@ -58,6 +58,7 @@ of actions.
 | `n` `t` `e` `r` `d` | new project, new thread, describe, rename, delete |
 | `/` | filter sessions (`esc` clears); `space space` searches all |
 | `u` / `space s` | refresh now / rewrite this project's summary |
+| `space c` | check cloud resources with Azure now |
 | `:q`, `:new <name>`, `:help` | command line |
 | `space`, `?` | which-key menu, all keys |
 
@@ -143,8 +144,8 @@ Kubernetes jobs, model deployments, registries, storage, SSH hosts, and so on.
 Each row says whether the agent created, used, or deleted it, and when.
 
 It comes from the shell commands the agents ran (`az`, `kubectl`, `helm`,
-`ssh`, `scp`, `rsync`), read from their session logs. Switchboard does not call
-Azure, so:
+`ssh`, `scp`, `rsync`), read from their session logs. Then Switchboard asks
+Azure what is still there (see below). From the logs alone:
 
 - A row means the agent named that resource in a command, not that it still
   exists. "deleted" means the agent ran a delete; it might have failed.
@@ -165,7 +166,44 @@ file; deleting it forces a rescan (a couple of seconds, even with gigabyte logs)
 The recent resources are also given to the summarizer, so the "happening now"
 paragraph can say things like "training is running on the ring1 cluster."
 
+### Checking with Azure
+
+When `az` is installed and logged in, Switchboard sends one
+[Azure Resource Graph](https://learn.microsoft.com/azure/governance/resource-graph/)
+query (`az graph query`) for every resource the logs named. It takes about a
+second, covers every subscription you can read, and runs again every 10
+minutes, a minute after new resources show up, or when you press `space c`.
+It only reads. The rows then say what Azure says now:
+
+| Shown | Meaning |
+| --- | --- |
+| `running` (green) | VM or cluster is up |
+| `stopped, still billed` (amber) | VM stopped from inside; it still holds its hardware |
+| `delete failed?` (amber) | an agent deleted it, but it still exists |
+| `deallocated` | VM is off and not billed for compute |
+| `gone` | it no longer exists |
+
+The detail column shows the VM size or node pools (`2× D4as_v5 + auto nodes`)
+and the real resource group. Anything running or still billed moves to the
+top, however long ago an agent touched it.
+
+Limits:
+
+- Only kinds whose logged name is the real Azure name are checked: VMs, scale
+  sets, AKS, AI accounts, registries, storage, key vaults, container apps, web
+  apps, and resource groups. Model deployments, Kubernetes jobs, and SSH hosts
+  are not.
+- A kubectl cluster is matched to AKS by its context or kubeconfig name. If
+  those differ, it is just not checked.
+- "gone" can also mean the resource is in a subscription you cannot read.
+
+`--live off` (or `SWITCHBOARD_LIVE=off`) turns it off; `--live on` fails if
+`az` is missing. `switchboard cloud` and `summarize` use it too, and the
+summarizer is told what Azure said.
+
 ## Not yet
 
-- Checking with `az` whether a listed resource still exists, and what it costs.
+- Cost figures. Cost Management lags about a day, so sizes and power state
+  stand in for now.
+- Checking Kubernetes jobs with `kubectl`.
 - Starting new agent sessions from the panel.

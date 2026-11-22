@@ -32,6 +32,8 @@ func main() {
 		"who writes project summaries: auto, copilot, off, or a shell command that reads the prompt on stdin (env SWITCHBOARD_SUMMARIZER)")
 	model := fs.String("summary-model", envOr("SWITCHBOARD_SUMMARY_MODEL", "claude-haiku-4.5"),
 		"model for the copilot summarizer (env SWITCHBOARD_SUMMARY_MODEL)")
+	liveFlag := fs.String("live", envOr("SWITCHBOARD_LIVE", "auto"),
+		"ask Azure Resource Graph whether listed resources still exist: auto (when az is installed), on, or off (env SWITCHBOARD_LIVE)")
 	every := fs.Duration("summary-every", ui.DefaultSummaryEvery, "shortest gap between automatic rewrites of one project's summary")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), `Usage: switchboard [flags] [command]
@@ -64,11 +66,24 @@ Flags:
 		fail(err)
 	}
 
+	var check cloud.Checker
+	switch *liveFlag {
+	case "off", "":
+	case "auto", "on":
+		if _, err := exec.LookPath("az"); err == nil {
+			check = cloud.AzChecker()
+		} else if *liveFlag == "on" {
+			fail(fmt.Errorf("--live on: %w", err))
+		}
+	default:
+		fail(fmt.Errorf("--live must be auto, on, or off"))
+	}
+
 	switch fs.Arg(0) {
 	case "":
 		target, err := ui.Run(src, ui.Options{Store: st, StatePath: *statePath,
 			Summarize: run, SummaryPath: filepath.Join(dir, "summaries.json"), SummaryEvery: *every,
-			CloudPath: filepath.Join(dir, "cloud.json")})
+			CloudPath: filepath.Join(dir, "cloud.json"), CheckLive: check})
 		if err != nil {
 			fail(err)
 		}
@@ -83,7 +98,7 @@ Flags:
 			fail(err)
 		}
 	case "cloud":
-		if err := listCloud(src, st, filepath.Join(dir, "cloud.json"), strings.Join(fs.Args()[1:], " ")); err != nil {
+		if err := listCloud(src, st, check, filepath.Join(dir, "cloud.json"), strings.Join(fs.Args()[1:], " ")); err != nil {
 			fail(err)
 		}
 	case "summarize":
@@ -92,7 +107,7 @@ Flags:
 		if dry {
 			args = args[1:]
 		}
-		if err := summarize(src, st, run, filepath.Join(dir, "cloud.json"), strings.Join(args, " "), dry); err != nil {
+		if err := summarize(src, st, run, check, filepath.Join(dir, "cloud.json"), strings.Join(args, " "), dry); err != nil {
 			fail(err)
 		}
 	default:
@@ -190,7 +205,7 @@ func pickSummarizer(name, model, dir string) (summary.Runner, error) {
 	return summary.Shell(name, dir), nil
 }
 
-func summarize(src core.Sources, st *store.State, run summary.Runner, cloudPath, name string, dry bool) error {
+func summarize(src core.Sources, st *store.State, run summary.Runner, check cloud.Checker, cloudPath, name string, dry bool) error {
 	var pid string
 	for _, p := range st.Projects {
 		if strings.EqualFold(p.Name, name) {
@@ -205,7 +220,8 @@ func summarize(src core.Sources, st *store.State, run summary.Runner, cloudPath,
 		return err
 	}
 	now := time.Now()
-	in := ui.SummaryInput(st, ss, pid, now, scanCloud(cloudPath, ss))
+	res := scanCloud(cloudPath, ss)
+	in := ui.SummaryInput(st, ss, pid, now, res, checkLive(check, res))
 	prompt := summary.Prompt(in, now)
 	if dry {
 		fmt.Print(prompt)
@@ -237,7 +253,7 @@ func summarize(src core.Sources, st *store.State, run summary.Runner, cloudPath,
 	return nil
 }
 
-func listCloud(src core.Sources, st *store.State, indexPath, project string) error {
+func listCloud(src core.Sources, st *store.State, check cloud.Checker, indexPath, project string) error {
 	ss, err := core.Discover(src)
 	if err != nil {
 		return err
@@ -271,6 +287,13 @@ func listCloud(src core.Sources, st *store.State, indexPath, project string) err
 			return fmt.Errorf("no live sessions in a project named %q", project)
 		}
 	}
+	var all []cloud.Resource
+	for _, p := range by {
+		for _, rs := range p {
+			all = append(all, rs...)
+		}
+	}
+	live := checkLive(check, map[string][]cloud.Resource{"": all})
 	now := time.Now()
 	names := make([]string, 0, len(by))
 	for p := range by {
@@ -279,23 +302,42 @@ func listCloud(src core.Sources, st *store.State, indexPath, project string) err
 	sort.Strings(names)
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, p := range names {
-		rows, note := cloud.Rows(cloud.Merge(by[p]))
+		rows, note := cloud.Rows(cloud.Merge(by[p]), live)
 		if len(rows) == 0 && note == "" {
 			continue
 		}
 		fmt.Fprintf(w, "\n%s\n", p)
 		for _, r := range rows {
-			where := r.Detail
-			if where == "" {
-				where = r.Scope
+			did := r.Resource.Status() + " " + core.Ago(r.Last, now)
+			if s := r.Status(); s != r.Resource.Status() && !(r.Deleted && r.Gone()) {
+				did = s + " · " + did
 			}
-			fmt.Fprintf(w, "  %s\t%s\t%s\t%s %s\t%s\n", r.Kind, r.Name, where, r.Status(), core.Ago(r.Last, now), strings.Join(r.By, ", "))
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n", r.Kind, r.Name, clip(r.Where(), 70), did, strings.Join(r.By, ", "))
 		}
 		if note != "" {
 			fmt.Fprintf(w, "  also %s\n", note)
 		}
 	}
 	return w.Flush()
+}
+
+// checkLive asks Azure about the resources, or returns nil when it cannot.
+func checkLive(check cloud.Checker, res map[string][]cloud.Resource) map[string]cloud.Live {
+	if check == nil {
+		return nil
+	}
+	var all []cloud.Resource
+	for _, rs := range res {
+		all = append(all, rs...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	live, err := cloud.Check(ctx, check, all)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "switchboard: cloud check skipped:", err)
+		return nil
+	}
+	return live
 }
 
 // scanCloud brings the cloud index up to date for the given sessions.
@@ -312,4 +354,11 @@ func scanCloud(indexPath string, ss []core.Session) map[string][]cloud.Resource 
 	}
 	_ = ix.Save(indexPath)
 	return res
+}
+
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
 }

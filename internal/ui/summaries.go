@@ -75,7 +75,7 @@ func (m Model) summaryInput(pid string) summary.Input {
 	}
 	rows, _ := m.cloudRows(ss)
 	for _, r := range rows {
-		if len(in.Cloud) == 6 || r.Deleted {
+		if len(in.Cloud) == 6 || r.Gone() {
 			break
 		}
 		in.Cloud = append(in.Cloud, r.Line())
@@ -184,7 +184,7 @@ func (m *Model) forceSummary() tea.Cmd {
 
 // SummaryInput builds what the model would see for one project, for the
 // summarize command.
-func SummaryInput(st *store.State, ss []core.Session, pid string, now time.Time, res map[string][]cloud.Resource) summary.Input {
-	m := Model{opt: Options{Now: func() time.Time { return now }}, st: st, sessions: ss, cloudRes: res}
+func SummaryInput(st *store.State, ss []core.Session, pid string, now time.Time, res map[string][]cloud.Resource, live map[string]cloud.Live) summary.Input {
+	m := Model{opt: Options{Now: func() time.Time { return now }}, st: st, sessions: ss, cloudRes: res, cloudLive: live}
 	return m.summaryInput(pid)
 }

@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -12,6 +15,75 @@ import (
 
 type cloudMsg struct {
 	res map[string][]cloud.Resource
+}
+
+type liveMsg struct {
+	live map[string]cloud.Live
+	keys string
+	err  error
+}
+
+// DefaultLiveEvery is how often Azure is asked about known resources.
+const DefaultLiveEvery = 10 * time.Minute
+
+const (
+	liveTimeout = 90 * time.Second
+	liveSoonest = time.Minute // after new resources appear
+)
+
+// liveKeys fingerprints the resources a live check would ask about.
+func (m Model) liveKeys() (string, []cloud.Resource) {
+	var rs []cloud.Resource
+	var ids []string
+	for _, l := range m.cloudRes {
+		for _, r := range l {
+			if cloud.Checkable(r) {
+				rs = append(rs, r)
+				ids = append(ids, r.ID())
+			}
+		}
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, "\n"), rs
+}
+
+// maybeCheckLive asks Azure about the resources on a schedule: every
+// LiveEvery, or a minute after new ones show up. One check runs at a time.
+func (m *Model) maybeCheckLive(force bool) tea.Cmd {
+	if m.opt.CheckLive == nil || m.liveBusy {
+		return nil
+	}
+	keys, rs := m.liveKeys()
+	if len(rs) == 0 {
+		return nil
+	}
+	since := m.opt.Now().Sub(m.liveAt)
+	if !force && !(keys != m.liveKeys0 && since >= liveSoonest) && since < m.opt.LiveEvery {
+		return nil
+	}
+	m.liveBusy, m.liveAt = true, m.opt.Now()
+	run := m.opt.CheckLive
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+		defer cancel()
+		live, err := cloud.Check(ctx, run, rs)
+		return liveMsg{live: live, keys: keys, err: err}
+	}
+}
+
+func (m *Model) gotLive(msg liveMsg) {
+	m.liveBusy = false
+	m.liveKeys0 = msg.keys
+	if msg.err != nil {
+		// Keep the last answer; say so once rather than every ten minutes.
+		if m.liveErr == "" {
+			m.setErr(fmt.Errorf("cloud check failed: %w", msg.err))
+		}
+		m.liveErr = msg.err.Error()
+		return
+	}
+	m.liveErr = ""
+	m.cloudLive = msg.live
 }
 
 // scanCloud reads any new commands from the live sessions' logs in the
@@ -63,7 +135,7 @@ func (m Model) cloudRows(ss []core.Session) ([]cloud.Row, string) {
 	if len(by) == 0 {
 		return nil, ""
 	}
-	return cloud.Rows(cloud.Merge(by))
+	return cloud.Rows(cloud.Merge(by), m.cloudLive)
 }
 
 var shortKinds = map[string]string{
@@ -80,15 +152,41 @@ func shortKind(k string) string {
 	return strings.ToLower(strings.TrimPrefix(k, "Azure "))
 }
 
-func (m Model) cloudStatus(r cloud.Row) string {
-	t := r.Status() + " " + core.Ago(r.Last, m.opt.Now())
-	switch {
-	case r.Deleted:
-		return sSubtle.Render(t)
-	case r.Created:
-		return sGreen.Render(t)
+// cloudStatus is the right-hand column: what Azure says now, when that
+// adds anything, then what the agent last did and when. It also returns
+// the plain width.
+func (m Model) cloudStatus(r cloud.Row) (string, int) {
+	did := r.Resource.Status() + " " + core.Ago(r.Last, m.opt.Now())
+	now := r.Status()
+	if now == r.Resource.Status() || (r.Deleted && r.Gone()) {
+		now = ""
 	}
-	return sMuted.Render(t)
+	if r.Live == nil {
+		switch {
+		case r.Deleted:
+			return sSubtle.Render(did), len(did)
+		case r.Created:
+			return sGreen.Render(did), len(did)
+		}
+		return sMuted.Render(did), len(did)
+	}
+	didStyle := sMuted
+	if r.Gone() {
+		didStyle = sSubtle
+	}
+	if now == "" {
+		return didStyle.Render(did), len(did)
+	}
+	st := sMuted
+	switch {
+	case r.Billing() && now == "running":
+		st = sGreen
+	case r.Billing(), now == "delete failed?":
+		st = sAmber
+	case r.Gone():
+		st = sSubtle
+	}
+	return st.Render(now) + sSubtle.Render(" · ") + didStyle.Render(did), len([]rune(now)) + 3 + len(did)
 }
 
 // cloudSection renders the CLOUD block for a project brief or a session.
@@ -97,7 +195,16 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []strin
 	if len(rows) == 0 && note == "" {
 		return nil
 	}
-	lines := []string{"", section("CLOUD", "named in commands the agents ran")}
+	sub := "named in commands the agents ran"
+	switch {
+	case m.liveErr != "":
+		sub += " · Azure check failed, space c retries"
+	case m.cloudLive != nil:
+		sub += " · checked with Azure " + core.Ago(m.liveAt, m.opt.Now())
+	case m.liveBusy:
+		sub += " · checking with Azure…"
+	}
+	lines := []string{"", section("CLOUD", sub)}
 	if compact {
 		lines[1] = section("CLOUD", "")
 	}
@@ -116,10 +223,9 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []strin
 			break
 		}
 		shown++
-		right := m.cloudStatus(r)
-		rw := len(r.Status()) + 1 + len(core.Ago(r.Last, m.opt.Now()))
+		right, rw := m.cloudStatus(r)
 		name := sText
-		if r.Deleted {
+		if r.Gone() {
 			name = sSubtle
 		}
 		var left string
@@ -128,10 +234,7 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []strin
 			left = sSubtle.Render(k+" ") + name.Render(trunc(r.Name, w-rw-len(k)-3))
 		} else {
 			kind := pad(sSubtle.Render(trunc(r.Kind, 19)), 20)
-			where := r.Detail
-			if where == "" {
-				where = r.Scope
-			}
+			where := r.Where()
 			room := w - rw - 20 - 2
 			nw := nameW
 			if nw > room {
