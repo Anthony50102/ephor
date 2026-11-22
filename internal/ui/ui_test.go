@@ -378,7 +378,10 @@ func TestSummaries(t *testing.T) {
 	h.cmd = nil
 	h.keys("space", "s")
 	run(h.cmd)
-	h.mustSee("shipping release 1")
+	h.mustSee("shipping release 1", "rewrite failed")
+	if got := h.m.sums.Projects[p.ID]; got.Tried.IsZero() || !got.At.Equal(now) {
+		t.Fatalf("failure must not move the text's timestamp: %+v", got)
+	}
 	if h.m.sums.Projects[p.ID].Err == "" || h.m.maybeSummarize() != nil {
 		t.Fatal("a failed summary must be recorded and not retried at once")
 	}

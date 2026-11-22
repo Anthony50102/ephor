@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -46,8 +47,9 @@ type Summary struct {
 	Purpose  string            `json:"purpose,omitempty"`  // suggested when the user wrote none
 	Sessions map[string]string `json:"sessions,omitempty"` // session key to one line
 	At       time.Time         `json:"at"`
-	Input    string            `json:"input"` // fingerprint of what it was written from
-	Err      string            `json:"err,omitempty"`
+	Input    string            `json:"input"`           // fingerprint of what it was written from
+	Err      string            `json:"err,omitempty"`   // the last attempt failed; the text above is older
+	Tried    time.Time         `json:"tried,omitempty"` // when that failed attempt ran
 }
 
 const (
@@ -232,6 +234,11 @@ func command(dir, name string, args ...string) Runner {
 		}
 		cmd := exec.CommandContext(ctx, name, args...)
 		cmd.Dir = dir
+		// Kill the whole process group on timeout, and stop waiting for pipes
+		// that orphaned grandchildren may still hold open.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+		cmd.WaitDelay = 5 * time.Second
 		cmd.Stdin = strings.NewReader(prompt)
 		var out, errb bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &errb

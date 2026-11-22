@@ -791,10 +791,12 @@ func (m Model) summaryHead(pid, head string) string {
 	switch {
 	case m.sumBusy == pid:
 		return head + sSubtle.Render("   writing summary…")
-	case sum.Now != "":
-		return head + sSubtle.Render("   summary "+core.Ago(sum.At, m.opt.Now())+" · space s rewrites")
+	case sum.Err != "" && sum.Now != "":
+		return head + sRed.Render("   rewrite failed") + sSubtle.Render(" · text from "+core.Ago(sum.At, m.opt.Now())+" · space s retries")
 	case sum.Err != "":
 		return head + sRed.Render("   summary failed") + sSubtle.Render(" · space s retries")
+	case sum.Now != "":
+		return head + sSubtle.Render("   summary "+core.Ago(sum.At, m.opt.Now())+" · space s rewrites")
 	}
 	return head
 }

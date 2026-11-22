@@ -89,7 +89,11 @@ func (m Model) staleSummary(pid string, now time.Time) bool {
 	if cur.Input == summary.Fingerprint(m.summaryInput(pid)) {
 		return false
 	}
-	return cur.At.IsZero() || now.Sub(cur.At) >= m.opt.SummaryEvery
+	last := cur.At
+	if cur.Tried.After(last) {
+		last = cur.Tried
+	}
+	return last.IsZero() || now.Sub(last) >= m.opt.SummaryEvery
 }
 
 // maybeSummarize starts at most one summary at a time, preferring the project
@@ -144,9 +148,10 @@ func (m *Model) gotSummary(msg summaryMsg) {
 	}
 	next := msg.sum
 	if msg.err != nil {
-		// Keep the last good text; record the failure so it backs off.
+		// Keep the last good text and when it was written; record the
+		// failed attempt separately so it backs off.
 		prev := m.sums.Projects[msg.pid]
-		prev.Err, prev.At, prev.Input = msg.err.Error(), next.At, next.Input
+		prev.Err, prev.Tried = msg.err.Error(), next.At
 		next = prev
 		m.setErr(fmt.Errorf("summary for %s failed: %w", m.placeName(msg.pid, ""), msg.err))
 	}

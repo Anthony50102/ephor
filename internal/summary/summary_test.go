@@ -1,6 +1,7 @@
 package summary
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -64,5 +65,20 @@ func TestPromptLabelsSessions(t *testing.T) {
 		if !strings.Contains(p, want) {
 			t.Fatalf("prompt is missing %q:\n%s", want, p)
 		}
+	}
+}
+
+func TestShellTimeoutKillsGrandchildren(t *testing.T) {
+	// The pipeline forks children that hold stdout open; killing only sh
+	// would leave Run waiting on them.
+	run := Shell("sleep 30 | cat", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := run(ctx, "prompt"); err == nil {
+		t.Fatal("want a timeout error")
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("runner took %v after its deadline", d)
 	}
 }
