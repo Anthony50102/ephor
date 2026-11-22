@@ -35,22 +35,36 @@ switchboard list     # print sessions as a table
 switchboard list --json
 ```
 
-New sessions appear in **Unassigned**. Create a project with `N`, describe it
-with `e`, then select a session and press `o` to place it (or `a` to accept a
-suggestion). Inside tmux, `enter` switches your client to the session's window;
-outside tmux it attaches.
+New sessions appear in **Unassigned**. Create a project with `n`, describe it
+with `e`, then select a session and press `m` to move it into the project (or
+`a` to accept a suggestion). Inside tmux, `enter` switches your client to the
+session's window; outside tmux it attaches.
+
+Keys follow LazyVim and the Snacks explorer. Press `space` for a which-key menu
+of actions.
 
 | Key | Action |
 | --- | --- |
-| `j` / `k` | move in the focused list |
-| `tab`, `h`, `l` | switch between projects and sessions |
-| `[` / `]` | previous / next project |
-| `n` | next session that needs you |
+| `j` / `k`, `gg` / `G` | move in the focused list |
+| `h` / `l`, `ctrl-h` / `ctrl-l`, `tab` | projects column / sessions column |
+| `H` / `L` | previous / next project (like buffers) |
+| `]d` / `[d` | next / previous session that needs you (like diagnostics) |
+| `ctrl-d` / `ctrl-u` | scroll the brief |
 | `enter` | jump to the session's tmux window |
-| `o` / `a` | organize / accept suggestion |
-| `N` `t` `e` `R` `D` | new project, new thread, describe, rename, delete |
-| `/` | filter sessions (`esc` clears) |
-| `?` | all keys and colors |
+| `m` / `a` | move session to a project / accept suggestion |
+| `n` `t` `e` `r` `d` | new project, new thread, describe, rename, delete |
+| `/` | filter sessions (`esc` clears); `space space` searches all |
+| `u` | refresh now |
+| `:q`, `:new <name>`, `:help` | command line |
+| `space`, `?` | which-key menu, all keys |
+
+`ctrl-h` and `ctrl-l` only reach Switchboard if your tmux
+`vim-tmux-navigator` check treats it like Vim. Add `switchboard` to the
+process pattern:
+
+```tmux
+vim_pattern='([^[:space:]]+/)?g?\.?(view|l?n?vim?x?|fzf|switchboard)(diff)?(-wrapped)?'
+```
 
 Colors are fixed in meaning: amber needs you, green is working, cyan is
 finished and ready for your next instruction, hollow is quiet (nothing new in a

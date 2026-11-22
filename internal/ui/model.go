@@ -55,6 +55,7 @@ const (
 	inPurpose
 	inRename
 	inFilter
+	inCommand
 )
 
 type orgOpt struct {
@@ -93,6 +94,7 @@ type Model struct {
 	selKey        string
 	centerOff     int
 	filter        string
+	pending       string // first key of a multi-key sequence
 
 	mode      mode
 	input     textinput.Model
@@ -435,106 +437,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	m.status = ""
-	switch msg.String() {
-	case "q", "ctrl+c":
-		return m, tea.Quit
-	case "?":
-		m.mode = modeHelp
-	case "tab":
-		if m.focus == focusSide {
-			m.focus = focusSessions
-		} else {
-			m.focus = focusSide
-		}
-	case "h", "left":
-		m.focus = focusSide
-	case "l", "right":
-		m.focus = focusSessions
-	case "j", "down":
-		if m.focus == focusSide {
-			m.setSide(m.sideIdx + 1)
-		} else {
-			m.selectSession(m.sessIdx + 1)
-		}
-	case "k", "up":
-		if m.focus == focusSide {
-			m.setSide(m.sideIdx - 1)
-		} else {
-			m.selectSession(m.sessIdx - 1)
-		}
-	case "g", "home":
-		if m.focus == focusSide {
-			m.setSide(0)
-		} else {
-			m.selectSession(0)
-		}
-	case "G", "end":
-		if m.focus == focusSide {
-			m.setSide(len(m.side) - 1)
-		} else {
-			m.selectSession(len(m.visible()) - 1)
-		}
-	case "]":
-		m.stepProject(1)
-	case "[":
-		m.stepProject(-1)
-	case "n":
-		m.nextNeedsYou()
-	case "ctrl+d":
-		m.centerOff += m.height / 2
-	case "ctrl+u":
-		m.centerOff -= m.height / 2
-		if m.centerOff < 0 {
-			m.centerOff = 0
-		}
-	case "enter":
-		if m.focus == focusSide {
-			if len(m.visible()) > 0 {
-				m.focus = focusSessions
-			}
-			return m, nil
-		}
-		return m.jump()
-	case "o":
-		m.openOrganize()
-	case "a":
-		m.acceptSuggestion()
-	case "N":
-		m.startInput(inNewProject, "", "", "", "")
-	case "t":
-		if sc := m.scope(); sc.pid != "" {
-			m.startInput(inNewThread, sc.pid, "", "", "")
-		} else {
-			m.setErr(fmt.Errorf("select a project first"))
-		}
-	case "e":
-		if sc := m.scope(); sc.pid != "" {
-			if p := m.st.Project(sc.pid); p != nil {
-				m.startInput(inPurpose, sc.pid, "", "", p.Purpose)
-			}
-		} else {
-			m.setErr(fmt.Errorf("select a project first"))
-		}
-	case "R":
-		m.startRename()
-	case "D":
-		m.startDelete()
-	case "/":
-		m.startInput(inFilter, "", "", "", m.filter)
-	case "esc":
-		m.filter = ""
-		m.syncSelection()
-	case "r":
-		if !m.refreshing {
-			m.refreshing = true
-			return m, m.refresh()
-		}
-	}
-	return m, nil
-}
-
 func (m *Model) stepProject(dir int) {
 	var idx []int
 	for i, it := range m.side {
@@ -565,9 +467,9 @@ func (m *Model) stepProject(dir int) {
 	m.setSide(idx[len(idx)-1])
 }
 
-// nextNeedsYou cycles through every session that is blocked on the user,
-// switching scope to wherever that session lives.
-func (m *Model) nextNeedsYou() {
+// stepNeedsYou cycles through every session that is blocked on the user,
+// switching scope to wherever that session lives. dir is 1 or -1.
+func (m *Model) stepNeedsYou(dir int) {
 	now := m.opt.Now()
 	var waiting []core.Session
 	for _, s := range m.sessions {
@@ -581,11 +483,14 @@ func (m *Model) nextNeedsYou() {
 	}
 	core.SortSessions(waiting, now)
 	next := waiting[0]
+	if dir < 0 {
+		next = waiting[len(waiting)-1]
+	}
 	for i, s := range waiting {
-		// Only advance past the selection once the user is in the session list;
+		// Only step past the selection once the user is in the session list;
 		// the first press from elsewhere goes to the most urgent session.
 		if m.focus == focusSessions && s.Key == m.selKey {
-			next = waiting[(i+1)%len(waiting)]
+			next = waiting[(i+dir+len(waiting))%len(waiting)]
 			break
 		}
 	}
@@ -630,12 +535,12 @@ func (m *Model) acceptSuggestion() {
 		return
 	}
 	if _, assigned := m.assignment(s); assigned {
-		m.setStatus("Already in a project. Press o to move it.")
+		m.setStatus("Already in a project. Press m to move it.")
 		return
 	}
 	sg, ok := core.Suggest(s, m.st, m.sessions)
 	if !ok {
-		m.setStatus("No suggestion. Press o to choose a project.")
+		m.setStatus("No suggestion. Press m to choose a project.")
 		return
 	}
 	m.assign(s, sg.Project, sg.Thread)
@@ -676,7 +581,7 @@ func (m Model) placeName(pid, tid string) string {
 func (m *Model) openOrganize() {
 	s, ok := m.selected()
 	if !ok {
-		m.setErr(fmt.Errorf("select a session to organize (tab to the session list)"))
+		m.setErr(fmt.Errorf("select a session to move (l to focus the session list)"))
 		return
 	}
 	m.orgKey = s.Key
@@ -728,7 +633,7 @@ func (m Model) updateOrganize(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.orgIdx > 0 {
 			m.orgIdx--
 		}
-	case "N":
+	case "n":
 		m.startInput(inNewProject, "", "", m.orgKey, "")
 	case "t":
 		if o := m.orgOpts[m.orgIdx]; o.pid != "" {
@@ -770,6 +675,8 @@ func (m Model) inputPrompt() string {
 		return "Rename " + m.placeName(m.inputPID, m.inputTID)
 	case inFilter:
 		return "Filter sessions"
+	case inCommand:
+		return ":"
 	}
 	return ""
 }
@@ -787,6 +694,9 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.mode = modeNormal
 		m.input.Blur()
+		if m.inputKind == inCommand {
+			return m.runCommand(m.input.Value())
+		}
 		m.commitInput(strings.TrimSpace(m.input.Value()))
 		return m, nil
 	}
@@ -807,24 +717,7 @@ func (m *Model) commitInput(v string) {
 		m.syncSelection()
 		return
 	case inNewProject:
-		var pid string
-		s, hasSess := m.sessionByKey(m.inputKey)
-		if !m.change(func(st *store.State) error {
-			p, err := st.AddProject(v, now)
-			if err != nil {
-				return err
-			}
-			pid = p.ID
-			if hasSess {
-				st.AssignSession(s.Key, pid, "", s.Title(), now)
-			}
-			return nil
-		}) {
-			return
-		}
-		m.rebuildSide()
-		m.selectSide(sideItem{kind: sideProject, pid: pid})
-		m.setStatus("Created " + v + ". Press e to say what it is for.")
+		m.commitNewProject(v, m.inputKey)
 	case inNewThread:
 		var tid string
 		pid := m.inputPID
@@ -886,6 +779,28 @@ func (m Model) sessionByKey(key string) (core.Session, bool) {
 		}
 	}
 	return core.Session{}, false
+}
+
+func (m *Model) commitNewProject(name, sessKey string) {
+	now := m.opt.Now()
+	var pid string
+	s, hasSess := m.sessionByKey(sessKey)
+	if !m.change(func(st *store.State) error {
+		p, err := st.AddProject(name, now)
+		if err != nil {
+			return err
+		}
+		pid = p.ID
+		if hasSess {
+			st.AssignSession(s.Key, pid, "", s.Title(), now)
+		}
+		return nil
+	}) {
+		return
+	}
+	m.rebuildSide()
+	m.selectSide(sideItem{kind: sideProject, pid: pid})
+	m.setStatus("Created " + name + ". Press e to say what it is for.")
 }
 
 func (m *Model) selectSide(it sideItem) {

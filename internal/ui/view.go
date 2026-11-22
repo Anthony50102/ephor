@@ -80,7 +80,21 @@ func (m Model) View() string {
 		}
 		rows[i] = pad(r, w)
 	}
+	if m.pending != "" && m.mode == modeNormal {
+		wk := m.whichKey(w)
+		if len(wk) < bodyH {
+			copy(rows[bodyH-len(wk):], padAll(wk, w))
+		}
+	}
 	return m.viewHeader(w) + "\n" + strings.Join(rows, "\n") + "\n" + m.viewFooter(w)
+}
+
+func padAll(lines []string, w int) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = pad(l, w)
+	}
+	return out
 }
 
 func indent(lines []string, n int) []string {
@@ -126,6 +140,9 @@ func (m Model) viewHeader(w int) string {
 func (m Model) viewFooter(w int) string {
 	switch m.mode {
 	case modeInput:
+		if m.inputKind == inCommand {
+			return pad(sBlue.Render(":")+m.input.View(), w)
+		}
 		return pad(" "+sBlue.Render(m.inputPrompt()+": ")+m.input.View(), w)
 	case modeConfirm:
 		return pad(" "+sAmber.Render(m.confirmText)+"  "+sKey.Render("y")+sMuted.Render(" yes  ")+sKey.Render("any key")+sMuted.Render(" no"), w)
@@ -142,11 +159,11 @@ func (m Model) viewFooter(w int) string {
 	}
 	var keys [][2]string
 	if m.mode == modeOrganize {
-		keys = [][2]string{{"j/k", "move"}, {"enter", "place here"}, {"t", "new thread"}, {"N", "new project"}, {"esc", "cancel"}}
+		keys = [][2]string{{"j/k", "move"}, {"enter", "place here"}, {"t", "new thread"}, {"n", "new project"}, {"esc", "cancel"}}
 	} else if m.focus == focusSide {
-		keys = [][2]string{{"j/k", "browse"}, {"[ ]", "projects"}, {"n", "next needs you"}, {"tab", "sessions"}, {"N", "new project"}, {"e", "describe"}, {"?", "more"}}
+		keys = [][2]string{{"j/k", "browse"}, {"H/L", "projects"}, {"]d", "next needs you"}, {"l", "sessions"}, {"n", "new project"}, {"e", "describe"}, {"space", "menu"}}
 	} else {
-		keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"o", "organize"}, {"a", "accept"}, {"n", "next needs you"}, {"/", "filter"}, {"tab", "projects"}}
+		keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"m", "move"}, {"a", "accept"}, {"]d", "next needs you"}, {"/", "filter"}, {"h", "projects"}, {"space", "menu"}}
 	}
 	var b []string
 	for _, k := range keys {
@@ -203,7 +220,7 @@ func (m Model) viewSide(w, h int) []string {
 			add(i, sMagenta.Render("◇"), sText.Render("Unassigned"), right)
 			lines = append(lines, "", " "+sKicker.Render("PROJECTS"))
 			if len(m.st.Projects) == 0 {
-				lines = append(lines, " "+sSubtle.Render("none yet · N to create"))
+				lines = append(lines, " "+sSubtle.Render("none yet · n to create"))
 			}
 		case sideProject:
 			p := m.st.Project(it.pid)
@@ -337,7 +354,7 @@ func (m Model) viewOverview(w int) []string {
 	})
 	lines = append(lines, "", section("PROJECTS", "most urgent first"))
 	if len(cards) == 0 {
-		lines = append(lines, "", sMuted.Render("No projects yet. Press ")+sKey.Render("N")+sMuted.Render(" to create one, then put sessions in it with ")+sKey.Render("o")+sMuted.Render("."))
+		lines = append(lines, "", sMuted.Render("No projects yet. Press ")+sKey.Render("n")+sMuted.Render(" to create one, then move sessions into it with ")+sKey.Render("m")+sMuted.Render("."))
 	}
 	for _, c := range cards {
 		lines = append(lines, "")
@@ -409,7 +426,7 @@ func (m Model) needsYouBlock(w int, ss []core.Session, showPlace bool) []string 
 	if body == nil {
 		return nil
 	}
-	head := sAmber.Bold(true).Render("NEEDS YOU") + sSubtle.Render("   n selects it · enter jumps")
+	head := sAmber.Bold(true).Render("NEEDS YOU") + sSubtle.Render("   ]d selects it · enter jumps")
 	return accent(cAmber, w, head+"\n"+strings.Join(body, "\n"))
 }
 
@@ -437,7 +454,7 @@ func (m Model) viewInbox(w int) []string {
 		return append(lines, "", sGreen.Render("✓ ")+sMuted.Render("Everything is sorted."))
 	}
 	if len(m.st.Projects) == 0 {
-		lines = append(lines, "", sMuted.Render("Start with ")+sKey.Render("N")+sMuted.Render(" to create a project, or select a session and press ")+sKey.Render("o")+sMuted.Render("."))
+		lines = append(lines, "", sMuted.Render("Start with ")+sKey.Render("n")+sMuted.Render(" to create a project, or select a session and press ")+sKey.Render("m")+sMuted.Render("."))
 	}
 	sel, _ := m.selected()
 	for _, s := range ss {
@@ -452,7 +469,7 @@ func (m Model) viewInbox(w int) []string {
 			lines = append(lines, clamp(indent(wrap(sMuted.Render("asked: ")+sText.Render(s.Info.Ask), w-2), 2), 2, w)...)
 		}
 		if sg, ok := core.Suggest(s, m.st, m.sessions); ok {
-			lines = append(lines, "  "+sCyan.Render("→ ")+sText.Render(m.placeName(sg.Project, sg.Thread))+sSubtle.Render(" ("+sg.Why+")  ")+sKey.Render("a")+sMuted.Render(" accept  ")+sKey.Render("o")+sMuted.Render(" choose"))
+			lines = append(lines, "  "+sCyan.Render("→ ")+sText.Render(m.placeName(sg.Project, sg.Thread))+sSubtle.Render(" ("+sg.Why+")  ")+sKey.Render("a")+sMuted.Render(" accept  ")+sKey.Render("m")+sMuted.Render(" choose"))
 		}
 	}
 	return lines
@@ -501,7 +518,7 @@ func (m Model) viewProject(w int, sc sideItem) []string {
 	if now1 == nil {
 		msg := sSubtle.Render("Nothing is running right now.")
 		if r.Total == 0 {
-			msg = sSubtle.Render("No live sessions. Organize one into this project with ") + sKey.Render("o") + sSubtle.Render(".")
+			msg = sSubtle.Render("No live sessions. Move one into this project with ") + sKey.Render("m") + sSubtle.Render(".")
 		}
 		lines = append(lines, accent(cLine, w, sKicker.Render("HAPPENING NOW")+"\n"+msg)...)
 	} else {
@@ -657,7 +674,7 @@ func (m Model) viewDetail(w int) []string {
 	if a, ok := m.assignment(s); ok {
 		lines = append(lines, sTeal.Render("in   ")+sText.Render(trunc(m.placeName(a.Project, a.Thread), w-5)))
 	} else {
-		lines = append(lines, sTeal.Render("in   ")+sMagenta.Render("unassigned")+sSubtle.Render(" · o to organize"))
+		lines = append(lines, sTeal.Render("in   ")+sMagenta.Render("unassigned")+sSubtle.Render(" · m to move"))
 	}
 	return lines
 }
@@ -686,7 +703,7 @@ func (m Model) viewOrganize(w int) []string {
 		}
 		lines = append(lines, row)
 	}
-	lines = append(lines, "", sSubtle.Render("t adds a thread to the highlighted project. N creates a project."))
+	lines = append(lines, "", sSubtle.Render("t adds a thread to the highlighted project. n creates a project."))
 	return lines
 }
 
@@ -695,9 +712,10 @@ func (m Model) viewHelp(w int) []string {
 		title string
 		keys  [][2]string
 	}{
-		{"MOVE", [][2]string{{"j / k", "down / up in the focused list"}, {"tab  h  l", "switch between projects and sessions"}, {"[  ]", "previous / next project"}, {"n", "next session that needs you"}, {"g / G", "top / bottom"}, {"ctrl-d / ctrl-u", "scroll the brief"}}},
-		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"o", "organize the selected session"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"r", "refresh now (also every 3s)"}}},
-		{"PROJECTS", [][2]string{{"N", "new project"}, {"t", "new thread in this project"}, {"e", "describe what the project is for"}, {"R", "rename project or thread"}, {"D", "delete project or thread"}}},
+		{"MOVE", [][2]string{{"j / k", "down / up in the focused list"}, {"h l  ctrl-h ctrl-l", "projects / sessions column (also tab)"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"gg / G", "top / bottom"}, {"ctrl-d / ctrl-u", "scroll the brief"}}},
+		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
+		{"PROJECTS", [][2]string{{"n", "new project"}, {"t", "new thread in this project"}, {"e", "describe what the project is for"}, {"r", "rename project or thread"}, {"d", "delete project or thread"}}},
+		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":help", "this screen"}}},
 		{"COLORS", [][2]string{{sAmber.Render("●"), "needs you: a question or approval is waiting"}, {sGreen.Render("●"), "working"}, {sCyan.Render("✓"), "finished and ready for your next instruction"}, {sSubtle.Render("○"), "quiet: nothing new in a day"}, {sNewTag.Render("new"), "finished since you last opened the project"}}},
 	}
 	lines := []string{"", sKicker.Render("HELP"), sTitle.Render("Keys"), ""}

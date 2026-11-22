@@ -83,6 +83,12 @@ func (h *harness) keys(ks ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyEsc}
 		case "tab":
 			msg = tea.KeyMsg{Type: tea.KeyTab}
+		case "space":
+			msg = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
+		case "ctrl+h":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlH}
+		case "ctrl+l":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlL}
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}
@@ -113,7 +119,7 @@ func TestCreateProjectAndOrganize(t *testing.T) {
 	h := newHarness(t, ss, true)
 	h.mustSee("1 working", "2 unassigned", "No projects yet")
 
-	h.keys("N")
+	h.keys("n")
 	h.typeText("Billing")
 	h.keys("enter", "e")
 	h.typeText("Charge customers correctly.")
@@ -124,7 +130,7 @@ func TestCreateProjectAndOrganize(t *testing.T) {
 	h.mustSee("Billing", "Charge customers correctly.", "no live sessions")
 
 	// Unassigned shows a suggestion from the name, and `a` accepts it.
-	h.keys("h", "g", "j")
+	h.keys("h", "g", "g", "j")
 	h.mustSee("2 sessions to sort", "→ Billing (name matches project)")
 	h.keys("tab", "a")
 	st, _ := store.Load(h.path)
@@ -133,9 +139,9 @@ func TestCreateProjectAndOrganize(t *testing.T) {
 	}
 
 	// Organize the other one into a new thread from the dialog.
-	h.keys("o")
+	h.keys("m")
 	if h.m.mode != modeOrganize {
-		t.Fatal("o should open the organize dialog")
+		t.Fatal("m should open the organize dialog")
 	}
 	h.keys("t")
 	h.typeText("Docs")
@@ -147,7 +153,7 @@ func TestCreateProjectAndOrganize(t *testing.T) {
 	}
 	h.mustSee("Everything is sorted")
 
-	h.keys("h", "]")
+	h.keys("h", "L")
 	h.mustSee("HAPPENING NOW", "billing fix", "ask for billing fix", "THREADS", "Docs")
 }
 
@@ -162,11 +168,11 @@ func TestNextNeedsYouCyclesAcrossScopesAndJumps(t *testing.T) {
 	p := h.seedProject("Infra", "c", time.Time{})
 	h.mustSee("2 needs you", "NEEDS YOU", "Question: Which region?")
 
-	h.keys("n")
+	h.keys("]", "d")
 	if h.m.scope().kind != sideInbox || h.m.selKey != "a" || h.m.focus != focusSessions {
 		t.Fatalf("first n should select alpha in Unassigned: %+v %s", h.m.scope(), h.m.selKey)
 	}
-	h.keys("n")
+	h.keys("]", "d")
 	if h.m.scope().pid != p.ID || h.m.selKey != "c" {
 		t.Fatalf("second n should move to Infra/gamma: %+v %s", h.m.scope(), h.m.selKey)
 	}
@@ -193,12 +199,12 @@ func TestNewSinceLastVisit(t *testing.T) {
 	pid := h.seedProject("Alpha", "a", now.Add(-time.Hour)).ID
 	h.mustSee("1 new") // sidebar badge before opening
 
-	h.keys("]")
+	h.keys("L")
 	h.mustSee("RECENTLY FINISHED", "1 new since you last looked", "new Shipped the fix.")
 	if !h.m.st.Project(pid).LastViewed.Equal(now) {
 		t.Fatal("opening a project should record the visit")
 	}
-	h.keys("g", "]") // leave for the overview, then come back
+	h.keys("g", "g", "L") // leave for the overview, then come back
 	if strings.Contains(h.screen(), "new since you last looked") {
 		t.Fatal("new markers should clear after a visit")
 	}
@@ -218,7 +224,7 @@ func TestFilterAndDelete(t *testing.T) {
 	}
 
 	pid := h.seedProject("Doomed", "a", time.Time{}).ID
-	h.keys("]", "D")
+	h.keys("L", "d")
 	h.mustSee("Delete project Doomed?")
 	h.keys("y")
 	if h.m.st.Project(pid) != nil || len(h.m.st.Assign) != 0 || h.m.scope().kind != sideOverview {
@@ -232,7 +238,7 @@ func TestRendersAtManySizes(t *testing.T) {
 	h := newHarness(t, ss, true)
 	for _, size := range [][2]int{{60, 12}, {90, 30}, {123, 40}, {124, 40}, {240, 70}} {
 		h.send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		for _, k := range []string{"g", "?", "x", "tab", "o", "esc"} {
+		for _, k := range []string{"space", "?", "x", "]", "tab", "m", "esc"} {
 			out := h.m.View()
 			lines := strings.Split(out, "\n")
 			if len(lines) != size[1] {
@@ -254,7 +260,7 @@ func TestOtherInstanceEditsSurviveNavigation(t *testing.T) {
 	if _, err := store.Update(h.path, func(st *store.State) error { _, err := st.AddProject("Theirs", now); return err }); err != nil {
 		t.Fatal(err)
 	}
-	h.keys("N")
+	h.keys("n")
 	h.typeText("Mine")
 	h.keys("enter")
 	st, _ := store.Load(h.path)
@@ -262,4 +268,67 @@ func TestOtherInstanceEditsSurviveNavigation(t *testing.T) {
 		t.Fatalf("lost the other instance's project: %+v", st.Projects)
 	}
 	h.mustSee("Theirs", "Mine")
+}
+
+func TestVimKeys(t *testing.T) {
+	ss := []core.Session{
+		session("a", "alpha", agents.NeedsYou, time.Minute, 1),
+		session("b", "beta", agents.NeedsYou, 2*time.Minute, 2),
+		session("c", "gamma", agents.Working, 3*time.Minute, 3),
+	}
+	h := newHarness(t, ss, true)
+
+	h.keys("space")
+	h.mustSee("<leader>", "find a session", "new project")
+	h.keys("n")
+	if h.m.mode != modeInput || h.m.inputKind != inNewProject {
+		t.Fatal("<leader>n should start a new project")
+	}
+	h.keys("esc")
+
+	h.keys("[", "d")
+	if h.m.selKey != "b" {
+		t.Fatalf("[d from outside the list should pick the last waiting session, got %q", h.m.selKey)
+	}
+	h.keys("[", "d")
+	if h.m.selKey != "a" {
+		t.Fatalf("[d should step back, got %q", h.m.selKey)
+	}
+
+	h.keys("G")
+	if h.m.selKey != "c" {
+		t.Fatalf("G should select the last session, got %q", h.m.selKey)
+	}
+	h.keys("g", "g")
+	if h.m.selKey != "a" {
+		t.Fatalf("gg should select the first session, got %q", h.m.selKey)
+	}
+	h.keys("ctrl+h")
+	if h.m.focus != focusSide {
+		t.Fatal("ctrl-h should focus the projects column")
+	}
+	h.keys("ctrl+l")
+	if h.m.focus != focusSessions {
+		t.Fatal("ctrl-l should focus the sessions column")
+	}
+
+	h.keys("]", "x")
+	h.mustSee("]x is not mapped")
+
+	h.keys(":")
+	h.typeText("new Infra")
+	h.keys("enter")
+	if h.m.scope().kind != sideProject || h.m.placeName(h.m.scope().pid, "") != "Infra" {
+		t.Fatal(":new should create and open a project")
+	}
+	h.keys(":")
+	h.typeText("q")
+	next, cmd := h.m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	h.m = next.(Model)
+	if cmd == nil {
+		t.Fatal(":q should quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal(":q should quit")
+	}
 }
