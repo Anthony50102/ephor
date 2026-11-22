@@ -58,11 +58,16 @@ type Info struct {
 	Ask       string // latest instruction typed by the user
 	AskAt     time.Time
 	Results   []Result // newest first
+	Asks      []Result // recent instructions from the user, newest first
+	Said      string   // the agent's latest reply, for summaries
+	SaidAt    time.Time
 	UpdatedAt time.Time
 }
 
 const (
 	maxResults   = 5
+	maxAsks      = 4
+	maxSaid      = 1200
 	maxScanBytes = 24 << 20
 	maxLineBytes = 16 << 20
 )
@@ -156,4 +161,28 @@ func FirstSentence(s string, n int) string {
 		}
 	}
 	return oneLine(strings.ReplaceAll(s, "**", ""), n)
+}
+
+// noteAsk records a user instruction while scanning newest first.
+func (info *Info) noteAsk(text string, at time.Time) {
+	text = strings.TrimSpace(text)
+	if text == "" || len(info.Asks) >= maxAsks {
+		return
+	}
+	if len(info.Asks) == 0 {
+		info.Ask, info.AskAt = oneLine(text, 400), at
+	}
+	info.Asks = append(info.Asks, Result{At: at, Text: oneLine(text, 400)})
+}
+
+// noteSaid records the agent's newest reply while scanning newest first.
+func (info *Info) noteSaid(text string, at time.Time) {
+	text = strings.TrimSpace(text)
+	if text == "" || info.Said != "" {
+		return
+	}
+	if len(text) > maxSaid {
+		text = text[:maxSaid] + "…"
+	}
+	info.Said, info.SaidAt = text, at
 }

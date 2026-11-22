@@ -3,6 +3,7 @@
 package core
 
 import (
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -53,16 +54,19 @@ type Sources struct {
 	Copilot *agents.Copilot
 	Claude  *agents.Claude
 	Started func(pid int) (time.Time, error)
+	// SkipPane is Switchboard's own pane, so its summarizer is not listed.
+	SkipPane string
 }
 
 // DefaultSources reads the real tmux server, process table, and agent directories.
 func DefaultSources() Sources {
 	return Sources{
-		Tmux:    tmux.Client{Run: tmux.Exec},
-		Procs:   procs.Snapshot,
-		Copilot: &agents.Copilot{Dir: agents.DefaultCopilotDir()},
-		Claude:  &agents.Claude{Dir: agents.DefaultClaudeDir()},
-		Started: procs.StartTime,
+		Tmux:     tmux.Client{Run: tmux.Exec},
+		Procs:    procs.Snapshot,
+		Copilot:  &agents.Copilot{Dir: agents.DefaultCopilotDir()},
+		Claude:   &agents.Claude{Dir: agents.DefaultClaudeDir()},
+		Started:  procs.StartTime,
+		SkipPane: os.Getenv("TMUX_PANE"),
 	}
 }
 
@@ -90,6 +94,9 @@ func Discover(src Sources) ([]Session, error) {
 
 	var out []Session
 	for _, p := range panes {
+		if src.SkipPane != "" && p.PaneID == src.SkipPane {
+			continue
+		}
 		proc, kind, ok := table.FindAgent(p.PanePID)
 		if !ok {
 			continue

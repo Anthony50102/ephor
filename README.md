@@ -33,6 +33,8 @@ bind-key S new-window -S -n switchboard switchboard
 switchboard          # open the panel
 switchboard list     # print sessions as a table
 switchboard list --json
+switchboard summarize nabu            # write one project's summary now
+switchboard summarize --dry-run nabu  # print the prompt the model would see
 ```
 
 New sessions appear in **Unassigned**. Create a project with `n`, describe it
@@ -54,7 +56,7 @@ of actions.
 | `m` / `a` | move session to a project / accept suggestion |
 | `n` `t` `e` `r` `d` | new project, new thread, describe, rename, delete |
 | `/` | filter sessions (`esc` clears); `space space` searches all |
-| `u` | refresh now |
+| `u` / `space s` | refresh now / rewrite this project's summary |
 | `:q`, `:new <name>`, `:help` | command line |
 | `space`, `?` | which-key menu, all keys |
 
@@ -97,9 +99,42 @@ If the file cannot be parsed, Switchboard exits rather than overwrite it. You ca
 panels at once: each edit locks the file, rereads it, and applies only that
 edit, and every refresh picks up edits made elsewhere.
 
+## Summaries
+
+Each project gets a short, plain-language "happening now" paragraph, written
+for someone who knows the project but not the code, plus one line per session.
+If a project has no description, the model also suggests one (`e` to accept or
+edit).
+
+- **Input.** For each session in the project: its state, its last few asks,
+  its last two completion summaries, and the agent's latest message. Long text
+  is clipped. Run `switchboard summarize --dry-run <project>` to see the exact
+  prompt.
+- **When.** Only when that input changes, and at most once per project every
+  5 minutes (`--summary-every`). One call runs at a time, starting with the
+  project on screen. `space s` rewrites the current project now. A failed call
+  keeps the last good summary and waits before retrying.
+- **Who writes it.** By default the Copilot CLI, if it is installed, with
+  `claude-haiku-4.5`, no tools, and no custom instructions. The prompt goes
+  over stdin, so it does not show in `ps`. Calls take about 15-45 seconds.
+
+| Flag | Env | Default |
+| --- | --- | --- |
+| `--summarizer` | `SWITCHBOARD_SUMMARIZER` | `auto`: `copilot` if on PATH, else off. Also `copilot`, `off`, or any shell command that reads the prompt on stdin and prints JSON, for example `'claude -p --model haiku'`. |
+| `--summary-model` | `SWITCHBOARD_SUMMARY_MODEL` | `claude-haiku-4.5` |
+| `--summary-every` | | `5m` |
+
+Things to know:
+
+- Snippets of your agents' transcripts go to the model provider behind your
+  CLI, the same one your agents already use.
+- Each Copilot summary call is a real Copilot session, so these short sessions
+  appear in `copilot --resume` history. They run from
+  `~/.local/state/switchboard/summarizer`, so they are easy to tell apart.
+- Summaries are cached in `summaries.json` next to the state file. Deleting it
+  is safe.
+
 ## Not yet
 
-- Plain-language project summaries. Today the brief shows the latest ask and
-  the agents' own completion summaries; generated summaries come next.
 - Cloud resources (AKS, VMs) per project.
 - Starting new agent sessions from the panel.

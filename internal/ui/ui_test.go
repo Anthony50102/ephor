@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +12,7 @@ import (
 	"github.com/anthonypoole/switchboard/internal/agents"
 	"github.com/anthonypoole/switchboard/internal/core"
 	"github.com/anthonypoole/switchboard/internal/store"
+	"github.com/anthonypoole/switchboard/internal/summary"
 	"github.com/anthonypoole/switchboard/internal/tmux"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -30,6 +34,7 @@ type harness struct {
 	m      Model
 	jumped []tmux.Pane
 	path   string
+	cmd    tea.Cmd // last non-nil command from an Update
 }
 
 func newHarness(t *testing.T, ss []core.Session, inTmux bool) *harness {
@@ -70,6 +75,9 @@ func (h *harness) seedProject(name, key string, viewed time.Time) *store.Project
 func (h *harness) send(msg tea.Msg) tea.Cmd {
 	next, cmd := h.m.Update(msg)
 	h.m = next.(Model)
+	if cmd != nil {
+		h.cmd = cmd
+	}
 	return cmd
 }
 
@@ -331,4 +339,52 @@ func TestVimKeys(t *testing.T) {
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatal(":q should quit")
 	}
+}
+
+func TestSummaries(t *testing.T) {
+	ss := []core.Session{session("k1", "worker", agents.Working, time.Minute, 1)}
+	h := newHarness(t, ss, true)
+	calls, fail := 0, false
+	h.m.opt.Summarize = func(_ context.Context, prompt string) (string, error) {
+		calls++
+		if fail {
+			return "", errors.New("offline")
+		}
+		return fmt.Sprintf(`{"now":"The team is shipping release %d.","purpose":"Ship releases","sessions":{"S1":"Cutting the build"}}`, calls), nil
+	}
+	h.m.opt.SummaryPath = filepath.Join(t.TempDir(), "summaries.json")
+	p := h.seedProject("app", "k1", now)
+
+	run := func(cmd tea.Cmd) {
+		t.Helper()
+		if cmd == nil {
+			t.Fatal("expected a summary to start")
+		}
+		h.send(cmd())
+	}
+	run(h.m.maybeSummarize())
+	if h.m.maybeSummarize() != nil {
+		t.Fatal("nothing changed, so nothing should be rewritten")
+	}
+	h.keys("L")
+	h.mustSee("shipping release 1", "Cutting the build", "Probably: Ship releases")
+	if got := summary.LoadCache(h.m.opt.SummaryPath).Projects[p.ID].Now; got != "The team is shipping release 1." {
+		t.Fatalf("cache = %q", got)
+	}
+
+	// A failure keeps the last good text and backs off.
+	fail = true
+	h.cmd = nil
+	h.keys("space", "s")
+	run(h.cmd)
+	h.mustSee("shipping release 1")
+	if h.m.sums.Projects[p.ID].Err == "" || h.m.maybeSummarize() != nil {
+		t.Fatal("a failed summary must be recorded and not retried at once")
+	}
+
+	fail = false
+	h.cmd = nil
+	h.keys("space", "s")
+	run(h.cmd)
+	h.mustSee("shipping release 3")
 }

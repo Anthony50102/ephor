@@ -9,6 +9,7 @@ import (
 	"github.com/anthonypoole/switchboard/internal/agents"
 	"github.com/anthonypoole/switchboard/internal/core"
 	"github.com/anthonypoole/switchboard/internal/store"
+	"github.com/anthonypoole/switchboard/internal/summary"
 	"github.com/anthonypoole/switchboard/internal/tmux"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -73,6 +74,11 @@ type Options struct {
 	Jump      func(tmux.Pane) error // nil means quit and attach from outside tmux
 	Now       func() time.Time
 	NoTick    bool
+
+	// Summarize writes project summaries; nil turns them off.
+	Summarize    summary.Runner
+	SummaryPath  string
+	SummaryEvery time.Duration
 }
 
 // Model is the Bubble Tea model.
@@ -110,6 +116,9 @@ type Model struct {
 	confirmText string
 	confirmDo   func(*store.State) error
 
+	sums    *summary.Cache
+	sumBusy string // project whose summary is being written
+
 	viewedPID string
 	newSince  map[string]time.Time
 
@@ -134,7 +143,14 @@ func New(opt Options) Model {
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.CharLimit = 400
+	if opt.SummaryEvery == 0 {
+		opt.SummaryEvery = DefaultSummaryEvery
+	}
 	m := Model{opt: opt, st: opt.Store, input: ti, newSince: map[string]time.Time{}, width: 120, height: 40}
+	m.sums = &summary.Cache{Projects: map[string]summary.Summary{}}
+	if opt.SummaryPath != "" {
+		m.sums = summary.LoadCache(opt.SummaryPath)
+	}
 	if opt.StatePath != "" {
 		m.stamp = store.Stamp(opt.StatePath)
 	}
@@ -144,8 +160,8 @@ func New(opt Options) Model {
 
 // Run starts the program. It returns a pane to attach to when the user jumped
 // from outside tmux.
-func Run(src core.Sources, st *store.State, path string) (*tmux.Pane, error) {
-	opt := Options{Store: st, StatePath: path, Discover: func() ([]core.Session, error) { return core.Discover(src) }}
+func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
+	opt.Discover = func() ([]core.Session, error) { return core.Discover(src) }
 	if tmux.InsideTmux() {
 		opt.Jump = func(p tmux.Pane) error {
 			if err := src.Tmux.Focus(p); err != nil {
@@ -412,7 +428,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.reload()
 		m.syncSelection()
-		return m, nil
+		return m, m.maybeSummarize()
+	case summaryMsg:
+		m.gotSummary(msg)
+		return m, m.maybeSummarize()
 	case tickMsg:
 		cmds := []tea.Cmd{tick()}
 		if !m.refreshing {

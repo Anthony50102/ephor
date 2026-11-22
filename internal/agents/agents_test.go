@@ -97,6 +97,7 @@ func TestCopilotAskSkipsInjectedMessagesAndCollectsResults(t *testing.T) {
 
 	dir := t.TempDir()
 	var lines []string
+	lines = append(lines, ev("user.message", "2026-11-20T08:00:00Z", `{"content":"Older request"}`))
 	lines = append(lines, ev("user.message", "2026-11-20T09:00:00Z", `{"content":"Real request from the user"}`))
 	for i := 0; i < 7; i++ {
 		lines = append(lines, ev("session.task_complete", fmt.Sprintf("2026-11-20T10:0%d:00Z", i), fmt.Sprintf(`{"summary":"Result %d"}`, i)))
@@ -104,6 +105,8 @@ func TestCopilotAskSkipsInjectedMessagesAndCollectsResults(t *testing.T) {
 	lines = append(lines,
 		ev("session.task_complete", "2026-11-20T10:30:00Z", `{"summary":"Subagent result"}`, `"agentId":"sub"`),
 		ev("user.message", "2026-11-20T11:00:00Z", `{"content":"","transformedContent":"You have not yet marked the task as complete"}`),
+		ev("assistant.message", "2026-11-20T10:58:00Z", `{"content":"Main agent says hi"}`),
+		ev("assistant.message", "2026-11-20T10:59:00Z", `{"content":"Subagent chatter"}`, `"agentId":"sub"`),
 		ev("assistant.turn_end", "2026-11-20T11:01:00Z", `{}`))
 	writeSession(t, dir, "s1", lines...)
 	info, err := (&Copilot{Dir: dir}).Read("s1")
@@ -112,6 +115,12 @@ func TestCopilotAskSkipsInjectedMessagesAndCollectsResults(t *testing.T) {
 	}
 	if info.Ask != "Real request from the user" {
 		t.Fatalf("ask = %q", info.Ask)
+	}
+	if len(info.Asks) != 2 || info.Asks[0].Text != "Real request from the user" || info.Asks[1].Text != "Older request" {
+		t.Fatalf("asks = %+v", info.Asks)
+	}
+	if info.Said != "Main agent says hi" {
+		t.Fatalf("said = %q", info.Said)
 	}
 	if len(info.Results) != maxResults || info.Results[0].Text != "Result 6" || info.Results[4].Text != "Result 2" {
 		t.Fatalf("results = %+v", info.Results)
@@ -175,6 +184,9 @@ func TestClaudeTranscript(t *testing.T) {
 	}
 	if len(info.Results) != 1 || info.Results[0].Text != "Auth is split into three files." {
 		t.Fatalf("results = %+v", info.Results)
+	}
+	if info.Said != "Auth is split into three files." || len(info.Asks) != 1 || info.Asks[0].Text != "Split the auth module" {
+		t.Fatalf("said = %q, asks = %+v", info.Said, info.Asks)
 	}
 }
 

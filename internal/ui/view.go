@@ -317,8 +317,8 @@ func (m Model) viewOverview(w int) []string {
 		switch s.State(now) {
 		case agents.Working:
 			moving = append(moving, name+sSubtle.Render("  "+core.Ago(s.Info.UpdatedAt, now)))
-			if s.Info.Ask != "" {
-				moving = append(moving, clamp(indent(wrap(sMuted.Render(s.Info.Ask), w-6), 2), 1, w-4)...)
+			if d := m.doing(s); d != "" {
+				moving = append(moving, clamp(indent(wrap(sMuted.Render(d), w-6), 2), 1, w-4)...)
 			}
 		case agents.Ready:
 			ready = append(ready, name+sSubtle.Render("  "+core.Ago(s.Info.UpdatedAt, now)))
@@ -369,8 +369,18 @@ func (m Model) viewOverview(w int) []string {
 		if c.p.Purpose != "" {
 			lines = append(lines, clamp(indent(wrap(sMuted.Render(c.p.Purpose), w-2), 2), 1, w)...)
 		}
-		if hl := m.headline(c.s); hl != "" {
-			lines = append(lines, clamp(indent(wrap(hl, w-2), 2), 2, w)...)
+		sum, hasSum := m.summaryFor(c.p.ID)
+		if c.r.NeedsYou > 0 || !hasSum {
+			if hl := m.headline(c.s); hl != "" {
+				lines = append(lines, clamp(indent(wrap(hl, w-2), 2), 2, w)...)
+			}
+		}
+		if hasSum && c.r.Total > 0 {
+			n := 2
+			if c.r.NeedsYou > 0 {
+				n = 1
+			}
+			lines = append(lines, clamp(indent(wrap(sText.Render(sum.Now), w-2), 2), n, w)...)
 		}
 	}
 	if n := len(m.sessionsIn(sideItem{kind: sideInbox})); n > 0 {
@@ -492,9 +502,13 @@ func (m Model) viewProject(w int, sc sideItem) []string {
 		meta = stateWord(r.State) + sSubtle.Render(" · updated "+core.Ago(r.UpdatedAt, now))
 	}
 	lines := []string{"", sKicker.Render(kicker), spread(sTitle.Render(title), meta, w)}
-	if p.Purpose != "" {
+	sum, hasSum := m.summaryFor(p.ID)
+	switch {
+	case p.Purpose != "":
 		lines = append(lines, wrap(sMuted.Render(p.Purpose), w)...)
-	} else {
+	case hasSum && sum.Purpose != "":
+		lines = append(lines, wrap(sSubtle.Render("Probably: ")+sMuted.Render(sum.Purpose)+sSubtle.Render("  ")+sKey.Render("e")+sSubtle.Render(" to confirm or edit"), w)...)
+	default:
 		lines = append(lines, sSubtle.Render("No description yet. Press ")+sKey.Render("e")+sSubtle.Render(" to say what this project is for."))
 	}
 
@@ -510,19 +524,28 @@ func (m Model) viewProject(w int, sc sideItem) []string {
 			continue
 		}
 		now1 = append(now1, sGreen.Render("● ")+sBold.Render(s.Title())+sSubtle.Render("  "+core.Ago(s.Info.UpdatedAt, now)))
-		if s.Info.Ask != "" {
-			now1 = append(now1, clamp(indent(wrap(sText.Render(s.Info.Ask), w-6), 2), 2, w-4)...)
+		if d := m.doing(s); d != "" {
+			now1 = append(now1, clamp(indent(wrap(sText.Render(d), w-6), 2), 2, w-4)...)
 		}
 	}
+	var story []string
+	if hasSum {
+		story = wrap(sText.Render(sum.Now), w-4)
+	}
+	if story != nil && now1 != nil {
+		story = append(story, "")
+	}
+	body := append(story, now1...)
 	lines = append(lines, "")
-	if now1 == nil {
+	head := m.summaryHead(p.ID, sBlue.Bold(true).Render("HAPPENING NOW"))
+	if body == nil {
 		msg := sSubtle.Render("Nothing is running right now.")
 		if r.Total == 0 {
 			msg = sSubtle.Render("No live sessions. Move one into this project with ") + sKey.Render("m") + sSubtle.Render(".")
 		}
-		lines = append(lines, accent(cLine, w, sKicker.Render("HAPPENING NOW")+"\n"+msg)...)
+		lines = append(lines, accent(cLine, w, m.summaryHead(p.ID, sKicker.Render("HAPPENING NOW"))+"\n"+msg)...)
 	} else {
-		lines = append(lines, accent(cBlue, w, sBlue.Bold(true).Render("HAPPENING NOW")+"\n"+strings.Join(now1, "\n"))...)
+		lines = append(lines, accent(cBlue, w, head+"\n"+strings.Join(body, "\n"))...)
 	}
 
 	// Recent results, with markers for anything finished since the last visit.
@@ -652,6 +675,10 @@ func (m Model) viewDetail(w int) []string {
 		lines = append(lines, "")
 		lines = append(lines, clamp(wrap(sAmber.Render(s.Info.Reason), w), 4, w)...)
 	}
+	if doing := m.doing(s); doing != "" {
+		lines = append(lines, "", sKicker.Render("DOING")+sSubtle.Render("  summary"))
+		lines = append(lines, clamp(wrap(sText.Render(doing), w), 3, w)...)
+	}
 	if s.Info.Ask != "" {
 		lines = append(lines, "", sKicker.Render("LAST ASKED")+sSubtle.Render("  "+core.Ago(s.Info.AskAt, now)))
 		lines = append(lines, clamp(wrap(sText.Render(s.Info.Ask), w), 4, w)...)
@@ -737,4 +764,34 @@ func shortPath(p string) string {
 		}
 	}
 	return p
+}
+
+// doing is the best one-line description of what a session is doing: the
+// summary's line when there is one, otherwise the user's latest ask.
+func (m Model) doing(s core.Session) string {
+	if a, ok := m.assignment(s); ok {
+		if sum, ok := m.summaryFor(a.Project); ok {
+			if d := sum.Sessions[s.Key]; d != "" {
+				return d
+			}
+		}
+	}
+	return s.Info.Ask
+}
+
+// summaryHead adds the summary's age or progress to a block heading.
+func (m Model) summaryHead(pid, head string) string {
+	if m.opt.Summarize == nil {
+		return head
+	}
+	sum := m.sums.Projects[pid]
+	switch {
+	case m.sumBusy == pid:
+		return head + sSubtle.Render("   writing summary…")
+	case sum.Now != "":
+		return head + sSubtle.Render("   summary "+core.Ago(sum.At, m.opt.Now())+" · space s rewrites")
+	case sum.Err != "":
+		return head + sRed.Render("   summary failed") + sSubtle.Render(" · space s retries")
+	}
+	return head
 }

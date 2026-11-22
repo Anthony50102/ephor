@@ -149,7 +149,7 @@ type claudeBlock struct {
 }
 
 func readClaudeTranscript(path string, info *Info) {
-	decided, askFound := false, false
+	decided, lastPrompt := false, false
 	_ = scanBackward(path, maxScanBytes, func(line []byte) bool {
 		var e claudeEntry
 		if json.Unmarshal(line, &e) != nil || e.IsSidechain {
@@ -171,14 +171,18 @@ func readClaudeTranscript(path string, info *Info) {
 				info.Name = oneLine(e.Summary, 60)
 			}
 		case "last-prompt":
-			if !askFound && strings.TrimSpace(e.LastPrompt) != "" {
-				info.Ask, askFound = oneLine(e.LastPrompt, 400), true
+			if !lastPrompt && len(info.Asks) == 0 && strings.TrimSpace(e.LastPrompt) != "" {
+				info.Ask, lastPrompt = oneLine(e.LastPrompt, 400), true
 			}
 		case "user":
 			var s string
 			isPrompt := json.Unmarshal(e.Message.Content, &s) == nil && !e.IsMeta && !strings.HasPrefix(s, "<")
-			if isPrompt && !askFound {
-				info.Ask, info.AskAt, askFound = oneLine(s, 400), e.Timestamp, true
+			if isPrompt {
+				if lastPrompt && len(info.Asks) == 0 {
+					// last-prompt carries no time; prefer the real message.
+					info.Ask = ""
+				}
+				info.noteAsk(s, e.Timestamp)
 			}
 			if !decided {
 				info.State, decided = Working, true
@@ -186,6 +190,13 @@ func readClaudeTranscript(path string, info *Info) {
 		case "assistant":
 			var blocks []claudeBlock
 			_ = json.Unmarshal(e.Message.Content, &blocks)
+			var said []string
+			for _, b := range blocks {
+				if b.Type == "text" {
+					said = append(said, b.Text)
+				}
+			}
+			info.noteSaid(strings.Join(said, "\n"), e.Timestamp)
 			// tool_use or no stop reason means the turn continues. Any other
 			// reason (end_turn, stop_sequence, max_tokens, refusal) ends it.
 			if r := e.Message.StopReason; r != "" && r != "tool_use" {
@@ -205,6 +216,6 @@ func readClaudeTranscript(path string, info *Info) {
 				info.State, decided = Working, true
 			}
 		}
-		return !(decided && askFound && len(info.Results) >= maxResults)
+		return !(decided && len(info.Asks) >= maxAsks && info.Said != "" && len(info.Results) >= maxResults)
 	})
 }

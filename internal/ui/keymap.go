@@ -43,6 +43,7 @@ const (
 	aEsc
 	aRefresh
 	aCommand
+	aSummarize
 )
 
 var normalKeys = map[string]action{
@@ -77,6 +78,7 @@ var prefixes = map[string][]keyHint{
 		{"d", "delete", aDelete},
 		{"m", "move session to a project", aMove},
 		{"a", "accept suggestion", aAccept},
+		{"s", "rewrite project summary", aSummarize},
 		{"u", "refresh", aRefresh},
 		{"?", "all keys", aHelp},
 		{"q", "quit", aQuit},
@@ -195,7 +197,11 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		}
 	case aDescribe:
 		if p := m.st.Project(m.scope().pid); p != nil {
-			m.startInput(inPurpose, p.ID, "", "", p.Purpose)
+			purpose := p.Purpose
+			if sum, ok := m.summaryFor(p.ID); ok && purpose == "" {
+				purpose = sum.Purpose
+			}
+			m.startInput(inPurpose, p.ID, "", "", purpose)
 		} else {
 			m.setErr(fmt.Errorf("select a project first"))
 		}
@@ -219,6 +225,8 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		}
 	case aCommand:
 		m.startInput(inCommand, "", "", "", "")
+	case aSummarize:
+		return m, m.forceSummary()
 	}
 	return m, nil
 }

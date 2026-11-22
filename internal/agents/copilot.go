@@ -130,11 +130,10 @@ var copilotStateTypes = map[string]bool{
 
 func readCopilotEvents(path string, info *Info) error {
 	decided := false
-	askFound := false
 	completed := map[string]bool{}
 	return scanBackward(path, maxScanBytes, func(line []byte) bool {
 		typ := eventType(line)
-		if decided && typ != "user.message" && typ != "session.task_complete" {
+		if decided && typ != "user.message" && typ != "session.task_complete" && !(typ == "assistant.message" && info.Said == "") {
 			return true
 		}
 		if !decided && !copilotStateTypes[typ] && typ != "" {
@@ -153,10 +152,12 @@ func readCopilotEvents(path string, info *Info) error {
 		main := e.AgentID == ""
 		switch e.Type {
 		case "user.message":
-			if main && !askFound && strings.TrimSpace(e.Data.Content) != "" {
-				info.Ask = oneLine(e.Data.Content, 400)
-				info.AskAt = e.Timestamp
-				askFound = true
+			if main {
+				info.noteAsk(e.Data.Content, e.Timestamp)
+			}
+		case "assistant.message":
+			if main {
+				info.noteSaid(e.Data.Content, e.Timestamp)
 			}
 		case "session.task_complete":
 			if main && len(info.Results) < maxResults && strings.TrimSpace(e.Data.Summary) != "" {
@@ -166,7 +167,7 @@ func readCopilotEvents(path string, info *Info) error {
 		if !decided {
 			decided = decideCopilot(e, main, completed, info)
 		}
-		return !(decided && askFound && len(info.Results) >= maxResults)
+		return !(decided && len(info.Asks) >= maxAsks && info.Said != "" && len(info.Results) >= maxResults)
 	})
 }
 
