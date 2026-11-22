@@ -160,7 +160,7 @@ Azure, so:
 
 Logs can be gigabytes, so each one is read once and then only from where the
 last scan stopped. Offsets and results live in `cloud.json` next to the state
-file; deleting it forces a rescan (about 2 seconds for 3 GB of logs).
+file; deleting it forces a rescan (a couple of seconds, even with gigabyte logs).
 
 The recent resources are also given to the summarizer, so the "happening now"
 paragraph can say things like "training is running on the ring1 cluster."
