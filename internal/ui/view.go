@@ -236,15 +236,19 @@ func (m Model) viewSide(w, h int) []string {
 			} else if r.Total > 0 {
 				right = sSubtle.Render(fmt.Sprint(r.Total))
 			}
-			if i > 0 && m.side[i-1].kind != sideInbox {
-				lines = append(lines, "")
+			if i > 0 && m.side[i-1].kind == sideThread {
+				lines = append(lines, "") // close the previous project's thread group
 			}
 			add(i, dot(r.State), sBold.Render(p.Name), right)
 		case sideThread:
 			p := m.st.Project(it.pid)
 			t := p.Thread(it.tid)
 			r := core.Roll(m.sessionsIn(it), now)
-			add(i, " "+dot(r.State), sMuted.Render(t.Name), "")
+			branch := "├─"
+			if i == len(m.side)-1 || m.side[i+1].kind != sideThread || m.side[i+1].pid != it.pid {
+				branch = "└─"
+			}
+			add(i, sLine.Render(branch)+" "+dot(r.State), sMuted.Render(t.Name), "")
 		}
 	}
 	lines = append(lines, "",
