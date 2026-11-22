@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/anthonypoole/switchboard/internal/agents"
+	"github.com/anthonypoole/switchboard/internal/cloud"
 	"github.com/anthonypoole/switchboard/internal/core"
 	"github.com/anthonypoole/switchboard/internal/store"
 	"github.com/anthonypoole/switchboard/internal/summary"
@@ -387,4 +388,27 @@ func TestSummaries(t *testing.T) {
 	h.keys("space", "s")
 	run(h.cmd)
 	h.mustSee("shipping release 3")
+}
+
+func TestCloudSection(t *testing.T) {
+	s := session("k1", "trainer", agents.Working, time.Minute, 1)
+	s.Info.Log = "/logs/k1"
+	h := newHarness(t, []core.Session{s}, true)
+	h.seedProject("ml", "k1", now)
+	h.send(cloudMsg{res: map[string][]cloud.Resource{"/logs/k1": {
+		{Kind: "VM", Name: "gpu-box", Scope: "rg-ml", Created: true, Last: now.Add(-time.Hour), Count: 1},
+		{Kind: "Kubernetes", Name: "aks1", Scope: "training", Last: now.Add(-2 * time.Hour), Count: 3},
+		{Kind: "Kubernetes job", Name: "sft", Scope: "aks1/training", Last: now.Add(-2 * time.Hour), Count: 1},
+		{Kind: "VM", Name: "old-box", Created: true, Deleted: true, Last: now.Add(-3 * time.Hour), Count: 2},
+		{Kind: "Azure network vnet", Name: "v", Created: true, Last: now, Count: 1},
+	}}})
+	h.keys("L")
+	h.mustSee("CLOUD", "gpu-box", "rg-ml", "created 1h", "1 job, latest sft · ns training", "deleted 3h", "+ 1 network resource")
+	h.keys("l")
+	h.mustSee("VM gpu-box", "k8s aks1")
+
+	in := h.m.summaryInput(h.m.scope().pid)
+	if len(in.Cloud) != 2 || in.Cloud[0] != "VM gpu-box in rg-ml, created" {
+		t.Fatalf("summary input cloud = %q", in.Cloud)
+	}
 }

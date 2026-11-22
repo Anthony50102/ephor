@@ -104,6 +104,7 @@ func (c *Claude) Read(p ClaudeProc) (Info, error) {
 		return info, nil
 	}
 	path := matches[0]
+	info.Log = path
 	st, err := os.Stat(path)
 	if err != nil {
 		return info, err

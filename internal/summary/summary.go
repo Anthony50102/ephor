@@ -23,6 +23,7 @@ type Input struct {
 	Project  string
 	Purpose  string
 	Sessions []SessionInput
+	Cloud    []string // resources the sessions' commands named, most recent first
 }
 
 // SessionInput describes one agent session.
@@ -106,6 +107,7 @@ Reply with only a JSON object, no code fence:
 - purpose: if the project has no stated purpose, one sentence on what the project is for. Otherwise "".
 - In "now" and "purpose", never write session labels like S1. The reader cannot see them. Describe the work instead, or name a session by its quoted title if you must.
 - sessions: for every session label, at most twelve words on what it is doing or just finished.
+- Mention cloud resources only when they explain what is happening, for example a training job on a cluster or a VM that was just created.
 - Use only the facts below. If they are thin, say less rather than guess.
 
 `)
@@ -114,6 +116,12 @@ Reply with only a JSON object, no code fence:
 		fmt.Fprintf(&b, "STATED PURPOSE: %s\n", in.Purpose)
 	} else {
 		b.WriteString("STATED PURPOSE: none\n")
+	}
+	if len(in.Cloud) > 0 {
+		b.WriteString("CLOUD RESOURCES (named in commands the agents ran):\n")
+		for _, c := range in.Cloud {
+			fmt.Fprintf(&b, "  - %s\n", c)
+		}
 	}
 	for i, s := range in.Sessions {
 		if i == maxSessions {

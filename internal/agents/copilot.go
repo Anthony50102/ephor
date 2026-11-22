@@ -71,7 +71,7 @@ func (c *Copilot) Read(id string) (Info, error) {
 	}
 	c.mu.Unlock()
 
-	info := Info{Kind: "copilot", ID: id}
+	info := Info{Kind: "copilot", ID: id, Log: events}
 	meta := readYAMLish(ws)
 	info.Name = meta["name"]
 	info.Cwd = meta["cwd"]

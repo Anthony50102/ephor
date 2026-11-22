@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/anthonypoole/switchboard/internal/agents"
+	"github.com/anthonypoole/switchboard/internal/cloud"
 	"github.com/anthonypoole/switchboard/internal/core"
 	"github.com/anthonypoole/switchboard/internal/store"
 	"github.com/anthonypoole/switchboard/internal/summary"
@@ -71,6 +72,13 @@ func (m Model) summaryInput(pid string) summary.Input {
 			si.Results = append(si.Results, r.Text)
 		}
 		in.Sessions = append(in.Sessions, si)
+	}
+	rows, _ := m.cloudRows(ss)
+	for _, r := range rows {
+		if len(in.Cloud) == 6 || r.Deleted {
+			break
+		}
+		in.Cloud = append(in.Cloud, r.Line())
 	}
 	return in
 }
@@ -171,7 +179,7 @@ func (m *Model) forceSummary() tea.Cmd {
 
 // SummaryInput builds what the model would see for one project, for the
 // summarize command.
-func SummaryInput(st *store.State, ss []core.Session, pid string, now time.Time) summary.Input {
-	m := Model{opt: Options{Now: func() time.Time { return now }}, st: st, sessions: ss}
+func SummaryInput(st *store.State, ss []core.Session, pid string, now time.Time, res map[string][]cloud.Resource) summary.Input {
+	m := Model{opt: Options{Now: func() time.Time { return now }}, st: st, sessions: ss, cloudRes: res}
 	return m.summaryInput(pid)
 }

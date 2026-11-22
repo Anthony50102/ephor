@@ -35,6 +35,7 @@ switchboard list     # print sessions as a table
 switchboard list --json
 switchboard summarize nabu            # write one project's summary now
 switchboard summarize --dry-run nabu  # print the prompt the model would see
+switchboard cloud nabu                # every cloud resource the project's sessions touched
 ```
 
 New sessions appear in **Unassigned**. Create a project with `n`, describe it
@@ -134,7 +135,37 @@ Things to know:
 - Summaries are cached in `summaries.json` next to the state file. Deleting it
   is safe.
 
+## Cloud resources
+
+The project brief and the session detail have a **CLOUD** section listing the
+cloud resources the agents worked with: VMs, AKS clusters and node pools,
+Kubernetes jobs, model deployments, registries, storage, SSH hosts, and so on.
+Each row says whether the agent created, used, or deleted it, and when.
+
+It comes from the shell commands the agents ran (`az`, `kubectl`, `helm`,
+`ssh`, `scp`, `rsync`), read from their session logs. Switchboard does not call
+Azure, so:
+
+- A row means the agent named that resource in a command, not that it still
+  exists. "deleted" means the agent ran a delete; it might have failed.
+- Names built at run time (`-n "vm-$(date +%s)"`, loop variables) are skipped.
+  Variables set earlier in the same command (`RG=x; az ... -g $RG`) are
+  resolved.
+- Commands run on a remote host over SSH, or through scripts, are not seen.
+- Read-only noise is left out: tokens, `az rest`, boards, repos, pipelines,
+  role assignments, and listings. Network plumbing, identities, and resource
+  groups the agent did not create are counted on one line instead of listed.
+- Kubernetes jobs and Helm releases are folded into their cluster's row. The
+  cluster is named after `--context` or the kubeconfig file name.
+
+Logs can be gigabytes, so each one is read once and then only from where the
+last scan stopped. Offsets and results live in `cloud.json` next to the state
+file; deleting it forces a rescan (about 2 seconds for 3 GB of logs).
+
+The recent resources are also given to the summarizer, so the "happening now"
+paragraph can say things like "training is running on the ring1 cluster."
+
 ## Not yet
 
-- Cloud resources (AKS, VMs) per project.
+- Checking with `az` whether a listed resource still exists, and what it costs.
 - Starting new agent sessions from the panel.

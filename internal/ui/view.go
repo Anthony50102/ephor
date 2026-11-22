@@ -579,6 +579,8 @@ func (m Model) viewProject(w int, sc sideItem) []string {
 		}
 	}
 
+	lines = append(lines, m.cloudSection(ss, w, 6, false)...)
+
 	if sc.kind == sideProject && len(p.Threads) > 0 {
 		lines = append(lines, "", section("THREADS", ""))
 		for _, t := range p.Threads {
@@ -688,6 +690,7 @@ func (m Model) viewDetail(w int) []string {
 		lines = append(lines, "", sKicker.Render("LATEST RESULT")+sSubtle.Render("  "+core.Ago(r.At, now)))
 		lines = append(lines, clamp(wrap(sText.Render(strings.Join(strings.Fields(r.Text), " ")), w), 5, w)...)
 	}
+	lines = append(lines, m.cloudSection([]core.Session{s}, w, 4, true)...)
 	lines = append(lines, "", sKicker.Render("WHERE"))
 	lines = append(lines, sTeal.Render("tmux ")+sText.Render(s.Pane.Target()))
 	lines = append(lines, sTeal.Render("dir  ")+sMuted.Render(trunc(shortPath(s.Info.Cwd), w-5)))

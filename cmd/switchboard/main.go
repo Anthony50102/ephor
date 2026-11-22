@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/anthonypoole/switchboard/internal/cloud"
 	"github.com/anthonypoole/switchboard/internal/core"
 	"github.com/anthonypoole/switchboard/internal/store"
 	"github.com/anthonypoole/switchboard/internal/summary"
@@ -38,6 +40,7 @@ Commands:
   (none)                            open the control panel
   list [--json]                     print discovered sessions
   summarize [--dry-run] <project>   write one project's summary now, or print the prompt
+  cloud [project]                   list cloud resources sessions have touched
 
 Flags:
 `)
@@ -64,7 +67,8 @@ Flags:
 	switch fs.Arg(0) {
 	case "":
 		target, err := ui.Run(src, ui.Options{Store: st, StatePath: *statePath,
-			Summarize: run, SummaryPath: filepath.Join(dir, "summaries.json"), SummaryEvery: *every})
+			Summarize: run, SummaryPath: filepath.Join(dir, "summaries.json"), SummaryEvery: *every,
+			CloudPath: filepath.Join(dir, "cloud.json")})
 		if err != nil {
 			fail(err)
 		}
@@ -78,13 +82,17 @@ Flags:
 		if err := list(src, st, fs.Arg(1) == "--json"); err != nil {
 			fail(err)
 		}
+	case "cloud":
+		if err := listCloud(src, st, filepath.Join(dir, "cloud.json"), strings.Join(fs.Args()[1:], " ")); err != nil {
+			fail(err)
+		}
 	case "summarize":
 		args := fs.Args()[1:]
 		dry := len(args) > 0 && args[0] == "--dry-run"
 		if dry {
 			args = args[1:]
 		}
-		if err := summarize(src, st, run, strings.Join(args, " "), dry); err != nil {
+		if err := summarize(src, st, run, filepath.Join(dir, "cloud.json"), strings.Join(args, " "), dry); err != nil {
 			fail(err)
 		}
 	default:
@@ -182,7 +190,7 @@ func pickSummarizer(name, model, dir string) (summary.Runner, error) {
 	return summary.Shell(name, dir), nil
 }
 
-func summarize(src core.Sources, st *store.State, run summary.Runner, name string, dry bool) error {
+func summarize(src core.Sources, st *store.State, run summary.Runner, cloudPath, name string, dry bool) error {
 	var pid string
 	for _, p := range st.Projects {
 		if strings.EqualFold(p.Name, name) {
@@ -197,7 +205,7 @@ func summarize(src core.Sources, st *store.State, run summary.Runner, name strin
 		return err
 	}
 	now := time.Now()
-	in := ui.SummaryInput(st, ss, pid, now)
+	in := ui.SummaryInput(st, ss, pid, now, scanCloud(cloudPath, ss))
 	prompt := summary.Prompt(in, now)
 	if dry {
 		fmt.Print(prompt)
@@ -227,4 +235,81 @@ func summarize(src core.Sources, st *store.State, run summary.Runner, name strin
 	}
 	fmt.Println()
 	return nil
+}
+
+func listCloud(src core.Sources, st *store.State, indexPath, project string) error {
+	ss, err := core.Discover(src)
+	if err != nil {
+		return err
+	}
+	res := scanCloud(indexPath, ss)
+	by := map[string]map[string][]cloud.Resource{} // project name to session title to resources
+	for _, s := range ss {
+		if res[s.Info.Log] == nil {
+			continue
+		}
+		p := "Unassigned"
+		if a, ok := st.Assign[s.Key]; ok {
+			if pr := st.Project(a.Project); pr != nil {
+				p = pr.Name
+			}
+		}
+		if project != "" && !strings.EqualFold(p, project) {
+			continue
+		}
+		if by[p] == nil {
+			by[p] = map[string][]cloud.Resource{}
+		}
+		by[p][s.Title()] = res[s.Info.Log]
+	}
+	if project != "" && by[project] == nil {
+		found := false
+		for p := range by {
+			found = found || strings.EqualFold(p, project)
+		}
+		if !found {
+			return fmt.Errorf("no live sessions in a project named %q", project)
+		}
+	}
+	now := time.Now()
+	names := make([]string, 0, len(by))
+	for p := range by {
+		names = append(names, p)
+	}
+	sort.Strings(names)
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	for _, p := range names {
+		rows, note := cloud.Rows(cloud.Merge(by[p]))
+		if len(rows) == 0 && note == "" {
+			continue
+		}
+		fmt.Fprintf(w, "\n%s\n", p)
+		for _, r := range rows {
+			where := r.Detail
+			if where == "" {
+				where = r.Scope
+			}
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%s %s\t%s\n", r.Kind, r.Name, where, r.Status(), core.Ago(r.Last, now), strings.Join(r.By, ", "))
+		}
+		if note != "" {
+			fmt.Fprintf(w, "  also %s\n", note)
+		}
+	}
+	return w.Flush()
+}
+
+// scanCloud brings the cloud index up to date for the given sessions.
+func scanCloud(indexPath string, ss []core.Session) map[string][]cloud.Resource {
+	ix := cloud.LoadIndex(indexPath)
+	res := map[string][]cloud.Resource{}
+	for _, s := range ss {
+		if s.Info.Log == "" {
+			continue
+		}
+		if _, err := ix.Scan(s.Info.Log); err == nil {
+			res[s.Info.Log] = ix.Resources(s.Info.Log)
+		}
+	}
+	_ = ix.Save(indexPath)
+	return res
 }

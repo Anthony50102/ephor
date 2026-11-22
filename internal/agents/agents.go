@@ -62,6 +62,7 @@ type Info struct {
 	Said      string   // the agent's latest reply, for summaries
 	SaidAt    time.Time
 	UpdatedAt time.Time
+	Log       string // the session's event log or transcript
 }
 
 const (

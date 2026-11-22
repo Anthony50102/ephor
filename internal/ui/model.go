@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/anthonypoole/switchboard/internal/agents"
+	"github.com/anthonypoole/switchboard/internal/cloud"
 	"github.com/anthonypoole/switchboard/internal/core"
 	"github.com/anthonypoole/switchboard/internal/store"
 	"github.com/anthonypoole/switchboard/internal/summary"
@@ -79,6 +80,11 @@ type Options struct {
 	Summarize    summary.Runner
 	SummaryPath  string
 	SummaryEvery time.Duration
+
+	// CloudPath is where the cloud scan index is kept; empty keeps it in
+	// memory only.
+	CloudPath string
+	NoCloud   bool
 }
 
 // Model is the Bubble Tea model.
@@ -118,6 +124,10 @@ type Model struct {
 
 	sums    *summary.Cache
 	sumBusy string // project whose summary is being written
+
+	cloudIx   *cloud.Index // used only by the scan in flight
+	cloudBusy bool
+	cloudRes  map[string][]cloud.Resource // by session log
 
 	viewedPID string
 	newSince  map[string]time.Time
@@ -428,10 +438,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.reload()
 		m.syncSelection()
-		return m, m.maybeSummarize()
+		return m, tea.Batch(m.maybeSummarize(), m.scanCloud())
 	case summaryMsg:
 		m.gotSummary(msg)
 		return m, m.maybeSummarize()
+	case cloudMsg:
+		m.cloudBusy = false
+		m.cloudRes = msg.res
+		return m, nil
 	case tickMsg:
 		cmds := []tea.Cmd{tick()}
 		if !m.refreshing {

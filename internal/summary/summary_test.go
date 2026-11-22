@@ -57,8 +57,10 @@ func TestFingerprintIgnoresTimeOnly(t *testing.T) {
 }
 
 func TestPromptLabelsSessions(t *testing.T) {
-	p := Prompt(input(), t0)
-	for _, want := range []string{"PROJECT: nabu", "STATED PURPOSE: none", `S1: "thinker" (copilot)`, `S2: "gpu" (claude)`, "latest ask: train it"} {
+	in := input()
+	in.Cloud = []string{"VM gpu in rg, created"}
+	p := Prompt(in, t0)
+	for _, want := range []string{"PROJECT: nabu", "STATED PURPOSE: none", `S1: "thinker" (copilot)`, `S2: "gpu" (claude)`, "latest ask: train it", "  - VM gpu in rg, created"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("prompt is missing %q:\n%s", want, p)
 		}
