@@ -836,6 +836,22 @@ func TestDockAgent(t *testing.T) {
 		t.Fatal("a closed pane should not stay docked")
 	}
 
+	// ctrl-l past the last panel moves to the docked agent's pane, as in
+	// vim-tmux-navigator; when narrow, the cards are already the edge.
+	var moved []string
+	h.m.opt.SelectPane = func(dir string) error { moved = append(moved, dir); return nil }
+	h.m.focus = focusSide
+	h.keys("ctrl+l", "ctrl+l", "ctrl+l")
+	if h.m.focus != focusSessions || strings.Join(moved, "") != "R" {
+		t.Fatalf("focus %d, moved %q", h.m.focus, moved)
+	}
+	h.send(tea.WindowSizeMsg{Width: 98, Height: 50})
+	h.m.focus = focusCenter
+	h.keys("ctrl+l", "ctrl+h", "ctrl+h")
+	if h.m.focus != focusSide || strings.Join(moved, "") != "RRL" {
+		t.Fatalf("narrow: focus %d, moved %q", h.m.focus, moved)
+	}
+
 	h.m.opt.Dock = nil
 	h.keys("v")
 	h.mustSee("needs Switchboard running inside tmux")

@@ -55,12 +55,17 @@ const (
 	aCopy
 	aConnect
 	aDock
+	aNavLeft
+	aNavRight
+	aNavDown
+	aNavUp
 )
 
 var normalKeys = map[string]action{
 	"q": aQuit, "ctrl+c": aQuit, "?": aHelp,
-	"tab": aFocusToggle, "h": aFocusSide, "left": aFocusSide, "ctrl+h": aFocusSide,
-	"l": aFocusSessions, "right": aFocusSessions, "ctrl+l": aFocusSessions,
+	"tab": aFocusToggle, "h": aFocusSide, "left": aFocusSide, "ctrl+h": aNavLeft,
+	"l": aFocusSessions, "right": aFocusSessions, "ctrl+l": aNavRight,
+	"ctrl+j": aNavDown, "ctrl+k": aNavUp,
 	"j": aDown, "down": aDown, "k": aUp, "up": aUp,
 	"home": aTop, "G": aBottom, "end": aBottom,
 	"ctrl+d": aHalfDown, "ctrl+u": aHalfUp, "ctrl+e": aLineDown, "ctrl+y": aLineUp,
@@ -161,6 +166,8 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		m.focusLeft()
 	case aFocusSessions:
 		m.focusRight()
+	case aNavLeft, aNavRight, aNavDown, aNavUp:
+		m.navigate(a)
 	case aDown, aUp:
 		dir := 1
 		if a == aUp {

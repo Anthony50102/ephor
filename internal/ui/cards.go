@@ -239,6 +239,37 @@ func (m *Model) focusRight() {
 	}
 }
 
+// navigate is ctrl-h/j/k/l, as vim-tmux-navigator does it in Vim: move
+// between panels, and past the edge move to the neighboring tmux pane.
+func (m *Model) navigate(a action) {
+	wide := m.layout().wide
+	edge := false
+	switch a {
+	case aNavLeft:
+		edge = m.focus == focusSide || m.focus == focusCenter && m.hideSide
+	case aNavRight:
+		// When narrow the session list sits below the cards, not beside.
+		edge = m.focus == focusSessions || m.focus == focusCenter && !wide
+	default:
+		edge = true
+	}
+	if !edge {
+		if a == aNavLeft {
+			m.focusLeft()
+		} else {
+			m.focusRight()
+		}
+		return
+	}
+	if m.opt.SelectPane == nil {
+		return
+	}
+	dir := map[action]string{aNavLeft: "L", aNavRight: "R", aNavDown: "D", aNavUp: "U"}[a]
+	if err := m.opt.SelectPane(dir); err != nil {
+		m.setErr(err)
+	}
+}
+
 // expandedSession is the extra detail an expanded session card shows.
 func (m Model) expandedSession(s core.Session, w int) []string {
 	lines := []string{"", sLine.Render(strings.Repeat("─", w))}

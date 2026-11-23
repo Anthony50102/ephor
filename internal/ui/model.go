@@ -108,6 +108,9 @@ type Options struct {
 	Dock   func(paneID string) error
 	Undock func(paneID string) error
 
+	// SelectPane moves to the tmux pane beside Switchboard's.
+	SelectPane func(dir string) error
+
 	// Prices fetches Azure list prices; nil hides costs. PricePath caches
 	// them.
 	Prices    cloud.Getter
@@ -260,6 +263,7 @@ func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
 		if self != "" {
 			opt.Dock = func(id string) error { return src.Tmux.Dock(id, self, dockWidth) }
 			opt.Undock = src.Tmux.Undock
+			opt.SelectPane = func(dir string) error { return src.Tmux.SelectPane(self, dir) }
 			// Agents left docked by a Switchboard that crashed go home.
 			if ids, err := src.Tmux.Orphans(); err == nil {
 				for _, id := range ids {

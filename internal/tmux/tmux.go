@@ -118,6 +118,12 @@ func (c Client) Show(paneID string) error {
 	return err
 }
 
+// SelectPane moves to the neighboring pane in a direction: L, R, U, or D.
+func (c Client) SelectPane(from, dir string) error {
+	_, err := c.Run("select-pane", "-t", from, "-"+dir)
+	return err
+}
+
 // Pretype types text into a pane without pressing Enter.
 func (c Client) Pretype(paneID, text string) error {
 	_, err := c.Run("send-keys", "-t", paneID, "-l", "--", text)

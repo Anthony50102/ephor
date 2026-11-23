@@ -89,7 +89,8 @@ With the sessions panel hidden, the list moves into the bottom of the brief.
 | Key | Action |
 | --- | --- |
 | `j` / `k`, `gg` / `G` | move in the focused panel: projects, cards, or sessions |
-| `h` / `l`, `ctrl-h` / `ctrl-l`, `tab` | move one panel left / right, like `ctrl-w h` / `ctrl-w l` |
+| `h` / `l`, `tab` | move one panel left / right, like `ctrl-w h` / `ctrl-w l` |
+| `ctrl-h/j/k/l` | move one panel, or past the edge to the next tmux pane (a docked agent) |
 | `enter` on a card | open a project or thread card; expand any other card (`esc` collapses) |
 | `space e` / `space l` / `space z` | toggle the projects panel / sessions panel / both (zen) |
 | `H` / `L` | previous / next project (like buffers) |
@@ -109,7 +110,10 @@ With the sessions panel hidden, the list moves into the bottom of the brief.
 
 `ctrl-h` and `ctrl-l` only reach Switchboard if your tmux
 `vim-tmux-navigator` check treats it like Vim. Add `switchboard` to the
-process pattern:
+process pattern. Like Neovim, Switchboard then moves between its own panels
+first and hands off to tmux at the edge. When the window is narrow, the cards
+panel counts as the right edge, so one `ctrl-l` reaches a docked agent.
+The pattern:
 
 ```tmux
 vim_pattern='([^[:space:]]+/)?g?\.?(view|l?n?vim?x?|fzf|switchboard)(diff)?(-wrapped)?'
