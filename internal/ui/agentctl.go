@@ -20,6 +20,7 @@ type LaunchReq struct {
 	Window  string
 	Dir     string
 	Command string
+	Pretype string // typed after Command without Enter, left for the user to finish
 }
 
 // screenMsg carries a capture of the pane being typed to.

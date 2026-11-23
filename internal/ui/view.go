@@ -219,7 +219,7 @@ func (m Model) viewFooter(w int) string {
 	} else if m.focus == focusSide {
 		keys = [][2]string{{"j/k", "browse"}, {"H/L", "projects"}, {"]d", "next needs you"}, {"l", "sessions"}, {"n", "new project"}, {"e", "describe"}, {"space", "menu"}}
 	} else if m.focus == focusCenter {
-		keys = [][2]string{{"j/k", "cards"}, {"enter", "open or expand"}, {"esc", "collapse"}, {"i", "answer"}, {"h/l", "panels"}, {"space e/l/z", "toggle panels"}, {"space", "menu"}}
+		keys = [][2]string{{"j/k", "cards"}, {"enter", "open or expand"}, {"esc", "collapse"}, {"i", "answer"}, {"y/s", "copy / open a shell"}, {"h/l", "panels"}, {"space e/l/z", "toggle panels"}, {"space", "menu"}}
 	} else {
 		keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"m", "move"}, {"a", "accept"}, {"]d", "next needs you"}, {"/", "filter"}, {"h", "projects"}, {"space", "menu"}}
 	}
@@ -642,9 +642,8 @@ func (m Model) viewProject(w int, sc sideItem) page {
 	if m.open("cloud") {
 		maxCloud = 1 << 20
 	}
-	if c := m.cloudSection(ss, w, maxCloud, false); c != nil {
-		pg.add(c[0])
-		pg.addCard(cardRef{id: "cloud"}, c[1:])
+	if c, cs := m.cloudSection(ss, w, maxCloud, false); c != nil {
+		pg.addPart(c, cs)
 	}
 	lines = nil
 
@@ -1014,7 +1013,8 @@ func (m Model) detailFor(s core.Session, w int, full bool) []string {
 		lines = append(lines, "", sKicker.Render("LATEST RESULT")+sSubtle.Render("  "+core.Ago(r.At, now)))
 		lines = append(lines, clamp(wrap(sText.Render(strings.Join(strings.Fields(r.Text), " ")), w), 5, w)...)
 	}
-	lines = append(lines, m.cloudSection([]core.Session{s}, w, cloudMax, true)...)
+	c, _ := m.cloudSection([]core.Session{s}, w, cloudMax, true)
+	lines = append(lines, c...)
 	lines = append(lines, "", sKicker.Render("WHERE"))
 	lines = append(lines, sTeal.Render("tmux ")+sText.Render(s.Pane.Target()))
 	lines = append(lines, sTeal.Render("dir  ")+sMuted.Render(trunc(shortPath(s.Info.Cwd), w-5)))
@@ -1067,7 +1067,7 @@ func (m Model) viewHelp(w int) []string {
 		keys  [][2]string
 	}{
 		{"MOVE", [][2]string{{"j / k", "down / up in the focused list"}, {"h l  ctrl-h ctrl-l", "move between panels (also tab)"}, {"j / k (middle)", "step through cards; enter opens or expands, esc collapses"}, {"space e / l / z", "toggle projects panel / sessions panel / both"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"gg / G", "top / bottom"}, {"ctrl-d / ctrl-u", "scroll the middle pane (ctrl-e / ctrl-y a line, or the wheel)"}}},
-		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"i", "type to the session without leaving"}, {"o", "start Copilot in this project or thread"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
+		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"i", "type to the session without leaving"}, {"o", "start Copilot in this project or thread"}, {"y", "copy how to reach the highlighted machine or cluster"}, {"s", "open a shell on it in a new tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
 		{"PROJECTS", [][2]string{{"n", "new project"}, {"t", "new thread in this project"}, {"e", "describe what the project is for"}, {"r", "rename project or thread"}, {"d", "delete project or thread"}}},
 		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":help", "this screen"}}},
 		{"COLORS", [][2]string{{sAmber.Render("●"), "needs you: a question or approval is waiting"}, {sGreen.Render("●"), "working"}, {sCyan.Render("✓"), "finished and ready for your next instruction"}, {sSubtle.Render("○"), "quiet: nothing new in a day"}, {sNewTag.Render("new"), "finished since you last opened the project"}}},

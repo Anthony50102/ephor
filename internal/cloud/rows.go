@@ -12,6 +12,9 @@ type Row struct {
 	Resource
 	Detail string // for clusters: namespaces and workloads
 	Live   *Live  // nil when Azure was not asked
+
+	Workloads []Resource // for clusters: the jobs and deployments agents touched
+	Hosts     []string   // addresses agents logged in to, for a VM
 }
 
 // Gone is true when the resource no longer exists, by the logs or by Azure.
@@ -76,6 +79,9 @@ func (r Row) Where() string {
 	if r.Live != nil && r.Live.Size != "" {
 		parts = append(parts, r.Live.Size)
 	}
+	if len(r.Hosts) > 0 {
+		parts = append(parts, strings.Join(r.Hosts, ", "))
+	}
 	if r.Detail != "" {
 		parts = append(parts, r.Detail)
 	} else if g := r.Group(); g != "" {
@@ -111,6 +117,7 @@ func Rows(rs []Resource, live map[string]Live) ([]Row, string) {
 	type work struct {
 		kinds map[string]int
 		last  Resource
+		all   []Resource
 	}
 	workloads := map[string]*work{} // cluster name to its workloads
 	hidden := map[string]int{}
@@ -124,6 +131,7 @@ func Rows(rs []Resource, live map[string]Live) ([]Row, string) {
 				workloads[cl] = w
 			}
 			w.kinds[strings.TrimPrefix(strings.TrimPrefix(r.Kind, "Kubernetes "), "Helm ")]++
+			w.all = append(w.all, r)
 			if r.Last.After(w.last.Last) {
 				w.last = r
 			}
@@ -146,6 +154,7 @@ func Rows(rs []Resource, live map[string]Live) ([]Row, string) {
 		}
 		var parts []string
 		if w := workloads[r.Name]; w != nil {
+			r.Workloads = w.all
 			var ks []string
 			for k, n := range w.kinds {
 				ks = append(ks, plural(n, k))
@@ -169,6 +178,7 @@ func Rows(rs []Resource, live map[string]Live) ([]Row, string) {
 		r.Detail = strings.Join(parts, " · ")
 	}
 	rows = foldAKS(rows)
+	rows = foldSSH(rows)
 	// Whatever is costing money comes first, however old; then what is
 	// stopped; then recent work; then what no longer exists.
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -221,6 +231,55 @@ func foldAKS(rows []Row) []Row {
 		}
 		if a.Live != nil {
 			k.Live = a.Live
+		}
+	}
+	if len(drop) == 0 {
+		return rows
+	}
+	out := rows[:0:0]
+	for i, r := range rows {
+		if !drop[i] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// foldSSH merges an address agents logged in to into the VM that owns it,
+// so one machine is one row. An address whose VM has no row of its own
+// becomes that VM's row.
+func foldSSH(rows []Row) []Row {
+	vms := map[string]int{}
+	for i, r := range rows {
+		if r.Kind == "VM" {
+			vms[strings.ToLower(r.Name)] = i
+		}
+	}
+	drop := map[int]bool{}
+	for i := range rows {
+		h := rows[i]
+		if h.Kind != "SSH host" || h.Live == nil || h.Live.VM == "" {
+			continue
+		}
+		j, ok := vms[strings.ToLower(h.Live.VM)]
+		if !ok {
+			r := &rows[i]
+			r.Hosts = []string{r.Name}
+			r.Kind, r.Name, r.Scope = "VM", h.Live.VM, h.Live.Group
+			vms[strings.ToLower(r.Name)] = i
+			continue
+		}
+		v := &rows[j]
+		drop[i] = true
+		v.Hosts = append(v.Hosts, h.Name)
+		v.takeAccess(h.Resource, h.Last.After(v.Last))
+		v.Count += h.Count
+		v.By = union(v.By, h.By)
+		if h.Last.After(v.Last) {
+			v.Last = h.Last
+		}
+		if v.Live == nil {
+			v.Live = h.Live
 		}
 	}
 	if len(drop) == 0 {

@@ -100,6 +100,18 @@ type Options struct {
 	Launch func(LaunchReq) (string, error)
 	Type   func(paneID, text string) error
 	Screen func(paneID string) (string, error)
+	Show   func(paneID string) error // switch to a pane; nil outside tmux
+
+	// Prices fetches Azure list prices; nil hides costs. PricePath caches
+	// them.
+	Prices    cloud.Getter
+	PricePath string
+
+	// Kubectl runs kubectl for open cluster cards; nil turns it off.
+	Kubectl cloud.Kubectl
+
+	// Copy puts text on the clipboard.
+	Copy func(string) error
 }
 
 // Model is the Bubble Tea model.
@@ -153,6 +165,12 @@ type Model struct {
 	liveKeys0 string    // the resources it asked about
 	liveErr   string
 
+	prices     *cloud.Prices
+	priceBusy  bool
+	priceTried time.Time
+	kube       map[string]cloud.Kube // by card ID
+	kubeBusy   map[string]bool
+
 	wantKey    string // select this session once it appears
 	replyPane  string
 	replyTitle string
@@ -198,6 +216,9 @@ func New(opt Options) Model {
 	if opt.StatePath != "" {
 		m.stamp = store.Stamp(opt.StatePath)
 	}
+	m.prices = cloud.LoadPrices(opt.PricePath)
+	m.kube = map[string]cloud.Kube{}
+	m.kubeBusy = map[string]bool{}
 	m.rebuildSide()
 	return m
 }
@@ -219,7 +240,13 @@ func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
 		if err != nil {
 			return "", err
 		}
-		return pane, src.Tmux.Type(pane, r.Command)
+		if err := src.Tmux.Type(pane, r.Command); err != nil || r.Pretype == "" {
+			return pane, err
+		}
+		return pane, src.Tmux.Pretype(pane, r.Pretype)
+	}
+	if tmux.InsideTmux() {
+		opt.Show = src.Tmux.Show
 	}
 	opt.Type = src.Tmux.Type
 	opt.Screen = src.Tmux.Screen
@@ -514,9 +541,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.maybeCheckLive(false)
 	case liveMsg:
 		m.gotLive(msg)
+		return m, m.maybePrices()
+	case priceMsg:
+		m.gotPrices(msg)
+		return m, nil
+	case kubeMsg:
+		m.gotKube(msg)
 		return m, nil
 	case tickMsg:
-		cmds := []tea.Cmd{tick()}
+		cmds := []tea.Cmd{tick(), m.maybePrices(), m.maybeKube(false)}
 		if !m.refreshing {
 			m.refreshing = true
 			cmds = append(cmds, m.refresh())

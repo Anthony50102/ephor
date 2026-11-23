@@ -27,19 +27,43 @@ type Touch struct {
 	Scope string // resource group, cluster/namespace, or account
 	Sub   string // Azure subscription, when given
 	Verb  Verb
+
+	// How the agent reached it, cleaned up so a person can run it.
+	SSH    string // an ssh or az ssh command that logs in
+	Tunnel string // a Bastion tunnel to open first
+	Kube   string // kubectl flags that select the cluster
+}
+
+// State carries what one command teaches about later ones in the same log:
+// which local ports are Bastion tunnels to which VM.
+type State struct {
+	Ports map[string]Target `json:"ports,omitempty"`
+}
+
+// Target is a VM at the far end of a tunnel.
+type Target struct {
+	VM     string `json:"vm"`
+	Group  string `json:"group,omitempty"`
+	Sub    string `json:"sub,omitempty"`
+	Tunnel string `json:"tunnel,omitempty"`
 }
 
 // Parse returns the resources named in a shell command line.
 func Parse(cmdline string) []Touch {
+	return ParseWith(cmdline, &State{})
+}
+
+// ParseWith is Parse with state carried over from earlier commands.
+func ParseWith(cmdline string, st *State) []Touch {
 	var out []Touch
 	vars := map[string]string{}
 	for _, words := range commands(cmdline) {
-		out = append(out, parseSimple(words, vars, 0)...)
+		out = append(out, parseSimple(words, vars, st, 0)...)
 	}
 	return out
 }
 
-func parseSimple(words []string, vars map[string]string, depth int) []Touch {
+func parseSimple(words []string, vars map[string]string, st *State, depth int) []Touch {
 	env := map[string]string{}
 	i := 0
 	for i < len(words) && isAssign(words[i]) {
@@ -72,20 +96,20 @@ func parseSimple(words []string, vars map[string]string, depth int) []Touch {
 	}
 	switch filepath.Base(words[0]) {
 	case "az":
-		return parseAz(words[1:])
+		return parseAz(words[1:], st)
 	case "kubectl":
 		return parseKubectl(words[1:], env, vars)
 	case "helm":
 		return parseHelm(words[1:], env, vars)
 	case "ssh":
-		return parseSSH(words[1:])
+		return parseSSH(words[1:], st)
 	case "scp", "rsync":
 		return parseCopy(words[1:])
 	case "bash", "sh", "zsh":
 		if depth < 2 && len(words) >= 3 && (words[1] == "-c" || words[1] == "-lc") {
 			var out []Touch
 			for _, ws := range commands(words[2]) {
-				out = append(out, parseSimple(ws, vars, depth+1)...)
+				out = append(out, parseSimple(ws, vars, st, depth+1)...)
 			}
 			return out
 		}
@@ -269,7 +293,7 @@ var azSkip = map[string]bool{
 	"artifacts": true, "lock": true, "resource": true, "deployment": true, "interactive": true,
 }
 
-func parseAz(args []string) []Touch {
+func parseAz(args []string, st *State) []Touch {
 	pos, fl := flags(args, nil)
 	if len(pos) < 2 || azSkip[pos[0]] {
 		return nil
@@ -284,7 +308,11 @@ func parseAz(args []string) []Touch {
 		if name == "" {
 			return nil
 		}
-		return []Touch{{Kind: "VM", Name: name, Scope: first(fl, "--resource-group", "-g"), Sub: first(fl, "--subscription"), Verb: Used}}
+		return []Touch{{Kind: "VM", Name: name, Scope: first(fl, "--resource-group", "-g"), Sub: first(fl, "--subscription"), Verb: Used,
+			SSH: azLine("az ssh vm", fl, azSSHKeep)}}
+	}
+	if len(pos) == 3 && pos[0] == "network" && pos[1] == "bastion" {
+		return parseBastion(pos[2], fl, st)
 	}
 	if verb == "list" {
 		return nil
@@ -376,7 +404,7 @@ func parseKubectl(args []string, env, vars map[string]string) []Touch {
 		return nil
 	}
 	cl, ns := cluster(fl, env, vars, "--context"), namespace(fl)
-	out := []Touch{{Kind: "Kubernetes", Name: cl, Scope: ns, Verb: Used}}
+	out := []Touch{{Kind: "Kubernetes", Name: cl, Scope: ns, Verb: Used, Kube: kubeAccess(fl, env, vars, "--context")}}
 	v := Used
 	switch pos[0] {
 	case "delete":
@@ -435,7 +463,8 @@ func parseHelm(args []string, env, vars map[string]string) []Touch {
 	if ns != "" {
 		scope += "/" + ns
 	}
-	return []Touch{{Kind: "Kubernetes", Name: cl, Scope: ns, Verb: Used}, {Kind: "Helm release", Name: name, Scope: scope, Verb: v}}
+	return []Touch{{Kind: "Kubernetes", Name: cl, Scope: ns, Verb: Used, Kube: kubeAccess(fl, env, vars, "--kube-context")},
+		{Kind: "Helm release", Name: name, Scope: scope, Verb: v}}
 }
 
 // ---- ssh ----
@@ -467,17 +496,55 @@ func host(dest string) string {
 	return dest
 }
 
-func parseSSH(args []string) []Touch {
+func parseSSH(args []string, st *State) []Touch {
+	var keep []string
+	port := ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if strings.HasPrefix(a, "-") {
-			if sshValued[a] {
+		if strings.HasPrefix(a, "-") && len(a) > 1 {
+			f := a[:2]
+			if !sshValued[f] {
+				continue
+			}
+			v := a[2:]
+			if v == "" {
+				if i+1 >= len(args) {
+					return nil
+				}
 				i++
+				v = args[i]
+			}
+			switch f {
+			case "-p":
+				port = v
+				keep = append(keep, "-p", v)
+			case "-i", "-J", "-l", "-F":
+				keep = append(keep, f, homeTilde(v))
+			case "-o":
+				k, val, ok := strings.Cut(v, "=")
+				if !ok {
+					k, val, ok = strings.Cut(v, " ")
+				}
+				if ok && sshKeepOpts[strings.ToLower(k)] {
+					keep = append(keep, "-o", k+"="+homeTilde(strings.TrimSpace(val)))
+					if strings.EqualFold(k, "Port") {
+						port = strings.TrimSpace(val)
+					}
+				}
 			}
 			continue
 		}
+		login := sshCommand(keep, a)
+		if isLocal(a) {
+			// A tunnel's near end: the VM is whatever the tunnel on this
+			// port reaches.
+			if t, ok := st.Ports[port]; ok && port != "" {
+				return []Touch{{Kind: "VM", Name: t.VM, Scope: t.Group, Sub: t.Sub, Verb: Used, SSH: login, Tunnel: t.Tunnel}}
+			}
+			return nil
+		}
 		if h := host(a); h != "" {
-			return []Touch{{Kind: "SSH host", Name: h, Verb: Used}}
+			return []Touch{{Kind: "SSH host", Name: h, Verb: Used, SSH: login}}
 		}
 		return nil
 	}

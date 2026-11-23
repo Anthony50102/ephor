@@ -109,6 +109,21 @@ func (c Client) SwitchClient(p Pane) error {
 	return err
 }
 
+// Show selects a pane's window and moves the current client to it.
+func (c Client) Show(paneID string) error {
+	if _, err := c.Run("select-window", "-t", paneID); err != nil {
+		return err
+	}
+	_, err := c.Run("switch-client", "-t", paneID)
+	return err
+}
+
+// Pretype types text into a pane without pressing Enter.
+func (c Client) Pretype(paneID, text string) error {
+	_, err := c.Run("send-keys", "-t", paneID, "-l", "--", text)
+	return err
+}
+
 // InsideTmux reports whether this process runs inside a tmux client.
 func InsideTmux() bool { return os.Getenv("TMUX") != "" }
 

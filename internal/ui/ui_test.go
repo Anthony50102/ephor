@@ -517,7 +517,7 @@ func TestCloudSection(t *testing.T) {
 	}
 	h.mustSee("checked with Azure", "running · created 1h", "NC24ads_A100_v4 · rg-real", "delete failed? · deleted 3h")
 	// Rows group by what they cost: running, then stopped, then the rest.
-	scr := ansi.Strip(strings.Join(h.m.cloudSection(h.m.sessions, 100, 6, false), "\n"))
+	scr := ansi.Strip(strings.Join(first2(h.m.cloudSection(h.m.sessions, 100, 6, false)), "\n"))
 	billing, stopped, used := strings.Index(scr, "Running, costing money"), strings.Index(scr, "○ Stopped"), strings.Index(scr, "Used recently")
 	if billing < 0 || stopped < billing || used < stopped || strings.Index(scr, "old-box") > stopped || strings.Index(scr, "spare") < stopped {
 		t.Fatalf("cloud rows are not grouped by cost:\n%s", scr)
@@ -696,4 +696,105 @@ func TestCardsAndPanels(t *testing.T) {
 	if !h.m.hideSide || !h.m.hideRight {
 		t.Fatal("space z should hide both")
 	}
+}
+
+func first2[A, B any](a A, _ B) A { return a }
+
+func TestInfraCards(t *testing.T) {
+	s := session("k1", "trainer", agents.Working, time.Minute, 1)
+	s.Info.Log = "/logs/k1"
+	h := newHarness(t, []core.Session{s}, true)
+	h.seedProject("ml", "k1", now)
+	tunnel := "az network bastion tunnel --name b -g rg-a --target-resource-id /x/virtualMachines/box --resource-port 22 --port 2299"
+	h.send(cloudMsg{res: map[string][]cloud.Resource{"/logs/k1": {
+		{Kind: "VM", Name: "box", Scope: "rg-a", SSH: "ssh -p 2299 azureuser@127.0.0.1", Tunnel: tunnel, Last: now.Add(-20 * time.Hour), Count: 4},
+		{Kind: "AKS cluster", Name: "aks1", Scope: "rg-k", Last: now.Add(-time.Hour), Count: 1},
+		{Kind: "Kubernetes", Name: "aks1", Scope: "exp", Kube: "--context aks1", Last: now.Add(-time.Hour), Count: 3},
+		{Kind: "Kubernetes job", Name: "train", Scope: "aks1/exp", Last: now.Add(-time.Hour), Count: 1},
+	}}})
+	h.m.opt.CheckLive = func(context.Context, string) ([]byte, error) {
+		return []byte(`{"data":[
+			{"name":"box","type":"microsoft.compute/virtualmachines","resourceGroup":"rg-a","location":"westus3","vmSize":"Standard_E32s_v5","power":"PowerState/running"},
+			{"name":"aks1","type":"microsoft.containerservice/managedclusters","resourceGroup":"rg-k","location":"westus2","power":"Running","k8s":"1.36.5",
+			 "pools":[{"name":"sys","count":2,"vmSize":"Standard_D4as_v5","mode":"System","powerState":{"code":"Running"}}]}]}`), nil
+	}
+	h.m.prices.USD = map[string]float64{"westus3|standard_e32s_v5": 2.016, "westus2|standard_d4as_v5": 0.25}
+	var kubeCalls []string
+	h.m.opt.Kubectl = func(_ context.Context, args ...string) ([]byte, error) {
+		c := strings.Join(args, " ")
+		kubeCalls = append(kubeCalls, c)
+		if strings.Contains(c, "get nodes") {
+			return []byte(`{"items":[{"metadata":{"name":"aks-sys-0","labels":{"agentpool":"sys"},"creationTimestamp":"2026-01-01T00:00:00Z"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`), nil
+		}
+		return []byte(`{"items":[{"kind":"Job","metadata":{"name":"train","namespace":"exp"},"status":{"failed":1,"conditions":[{"type":"Failed","status":"True","reason":"BackoffLimitExceeded"}]}},
+			{"kind":"Job","metadata":{"name":"someone-else","namespace":"exp"},"status":{"active":1}}]}`), nil
+	}
+	var copied []string
+	h.m.opt.Copy = func(s string) error { copied = append(copied, s); return nil }
+	var launched []LaunchReq
+	h.m.opt.Launch = func(r LaunchReq) (string, error) { launched = append(launched, r); return "%7", nil }
+
+	h.keys("L")
+	h.keys("space", "c")
+	h.send(h.cmd())
+	// The bill is totalled, and the VM nobody touched since yesterday is flagged.
+	h.mustSee("$2.52/h · $60 a day at list price", "$2.02/h · running", "1 running resource no agent has touched in 12 hours")
+
+	h.keys("l", "g", "g")
+	for i := 0; h.m.cardID != "res:"+cloudID(h, "box"); i++ {
+		if i > 20 {
+			t.Fatalf("never reached the VM card; at %q", h.m.cardID)
+		}
+		h.keys("j")
+	}
+	h.keys("enter")
+	h.mustSee("log in", tunnel[:40], "ssh -p 2299 azureuser@127.0.0.1", "E32s_v5 · $2.02/h list price when running")
+	h.keys("y")
+	if len(copied) != 1 || !strings.HasPrefix(copied[0], tunnel+" >/dev/null 2>&1 & sleep 10; ssh -p 2299") {
+		t.Fatalf("copied %q", copied)
+	}
+	h.keys("s")
+	if len(launched) != 1 || launched[0].Command != copied[0] {
+		t.Fatalf("launched %+v", launched)
+	}
+
+	// Opening the cluster asks kubectl, with the agent's own access flags.
+	h.keys("esc", "g", "g")
+	for i := 0; h.m.cardID != "res:"+cloudID(h, "aks1"); i++ {
+		if i > 20 {
+			t.Fatalf("never reached the cluster card; at %q", h.m.cardID)
+		}
+		h.keys("j")
+	}
+	h.cmd = nil
+	h.keys("enter")
+	h.mustSee("NODES", "asking kubectl")
+	h.send(h.cmd())
+	if len(kubeCalls) != 2 || kubeCalls[0] != "--context aks1 get nodes -o json" {
+		t.Fatalf("kubectl calls %q", kubeCalls)
+	}
+	h.mustSee("sys", "System · 2× D4as_v5", "$0.50/h", "aks-sys-0", "train", "failed (BackoffLimitExceeded)", "+ 1 other job in these namespaces: 1 running")
+	h.keys("s")
+	if r := launched[1]; !strings.HasPrefix(r.Command, "kubectl --context aks1 get nodes") || r.Pretype != "kubectl --context aks1 debug -it --image="+debugImage+" node/" {
+		t.Fatalf("launched %+v", r)
+	}
+	h.keys("y")
+	if copied[1] != "kubectl --context aks1 debug node/aks-sys-0 -it --image="+debugImage {
+		t.Fatalf("copied %q", copied[1])
+	}
+	// A fresh answer is not asked for again until it ages.
+	h.cmd = nil
+	if cmd := h.m.maybeKube(false); cmd != nil && cmd() != nil {
+		t.Fatal("kubectl should not be asked again within a minute")
+	}
+}
+
+func cloudID(h *harness, name string) string {
+	rows, _ := h.m.cloudRows(h.m.sessionsIn(h.m.scope()))
+	for _, r := range rows {
+		if r.Name == name {
+			return r.ID()
+		}
+	}
+	return "?"
 }

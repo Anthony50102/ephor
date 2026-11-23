@@ -52,6 +52,8 @@ const (
 	aToggleSide
 	aToggleRight
 	aZen
+	aCopy
+	aConnect
 )
 
 var normalKeys = map[string]action{
@@ -64,7 +66,7 @@ var normalKeys = map[string]action{
 	"H": aPrevProject, "L": aNextProject,
 	"enter": aEnter, "m": aMove, "a": aAccept,
 	"n": aNewProject, "t": aNewThread, "e": aDescribe, "r": aRename, "d": aDelete,
-	"o": aLaunch, "i": aReply,
+	"o": aLaunch, "i": aReply, "y": aCopy, "s": aConnect,
 	"/": aFilter, "esc": aEsc, "u": aRefresh, ":": aCommand,
 }
 
@@ -92,7 +94,7 @@ var prefixes = map[string][]keyHint{
 		{"m", "move session to a project", aMove},
 		{"a", "accept suggestion", aAccept},
 		{"s", "rewrite project summary", aSummarize},
-		{"c", "check cloud resources with Azure", aCheckCloud},
+		{"c", "check cloud resources with Azure and kubectl", aCheckCloud},
 		{"u", "refresh", aRefresh},
 		{"?", "all keys", aHelp},
 		{"q", "quit", aQuit},
@@ -273,7 +275,12 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		return m, m.startReply()
 	case aSummarize:
 		return m, m.forceSummary()
+	case aCopy:
+		m.copyAccess()
+	case aConnect:
+		m.connect()
 	case aCheckCloud:
+		kube := m.maybeKube(true)
 		switch {
 		case m.opt.CheckLive == nil:
 			m.setErr(fmt.Errorf("Azure checks are off (see --live)"))
@@ -282,10 +289,11 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		default:
 			if cmd := m.maybeCheckLive(true); cmd != nil {
 				m.setStatus("Checking cloud resources with Azure…")
-				return m, cmd
+				return m, tea.Batch(cmd, kube)
 			}
 			m.setStatus("No Azure resources to check.")
 		}
+		return m, kube
 	}
 	return m, nil
 }

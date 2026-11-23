@@ -20,6 +20,34 @@ type Live struct {
 	State string // "running", "deallocated", "stopped", or "" when it has no power state
 	Size  string // VM size, SKU, or AKS node pools
 	Group string // the real resource group
+
+	Location string
+	VMSize   string // full Azure size name, for prices
+	Spot     bool
+	Version  string // Kubernetes version of an AKS cluster
+	VM       string // for an SSH host: the VM that owns the address
+	Pools    []Pool
+	Machines []Machine // nodes made by node auto provisioning
+}
+
+// Pool is an AKS node pool.
+type Pool struct {
+	Name     string
+	Mode     string // System, User, or Machines for auto provisioning
+	Size     string
+	Count    int
+	Min, Max int
+	Auto     bool // autoscaling
+	Spot     bool
+	Stopped  bool
+}
+
+// Machine is a VM that node auto provisioning made for a cluster.
+type Machine struct {
+	Name    string
+	Size    string
+	Spot    bool
+	Running bool
 }
 
 // Word is the live state in a few words, or "" when it was not checked.
@@ -63,8 +91,13 @@ const napTag = "karpenter.azure.com_cluster"
 
 // Checkable reports whether a live check can say anything about r.
 func Checkable(r Resource) bool {
+	if r.Kind == "SSH host" {
+		return ipv4.MatchString(r.Name)
+	}
 	return armType(r) != "" && safeName.MatchString(r.Name)
 }
+
+var ipv4 = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}$`)
 
 func armType(r Resource) string {
 	if r.Kind == "Kubernetes" {
@@ -84,11 +117,18 @@ const (
 // Query builds one Resource Graph query covering every checkable resource.
 func Query(rs []Resource) string {
 	seen := map[string]bool{}
-	var res, groups, types, clusters []string
+	var res, groups, types, clusters, ips []string
 	tseen := map[string]bool{}
 	for _, r := range rs {
 		t := armType(r)
 		if !Checkable(r) || len(seen) >= maxNames {
+			continue
+		}
+		if r.Kind == "SSH host" {
+			if !seen["ip/"+r.Name] {
+				seen["ip/"+r.Name] = true
+				ips = append(ips, "'"+r.Name+"'")
+			}
 			continue
 		}
 		n := strings.ToLower(r.Name)
@@ -114,13 +154,15 @@ func Query(rs []Resource) string {
 	sort.Strings(types)
 	sort.Strings(groups)
 	sort.Strings(clusters)
-	const cols = "name, type, resourceGroup"
+	sort.Strings(ips)
+	const cols = "name, type, resourceGroup, location"
 	var parts []string
 	if len(res) > 0 {
 		parts = append(parts, "Resources | where type in~ ("+strings.Join(types, ",")+") and name in~ ("+strings.Join(res, ",")+")"+
 			" | project "+cols+", sku=tostring(sku.name), cap=toint(sku.capacity),"+
 			" vmSize=tostring(properties.hardwareProfile.vmSize),"+
 			" power=coalesce(tostring(properties.extended.instanceView.powerState.code), tostring(properties.powerState.code)),"+
+			" priority=tostring(properties.priority), k8s=tostring(properties.currentKubernetesVersion),"+
 			" pools=properties.agentPoolProfiles")
 	}
 	if len(groups) > 0 {
@@ -135,6 +177,18 @@ func Query(rs []Resource) string {
 			" power=tostring(properties.extended.instanceView.powerState.code),"+
 			" aksCluster=tostring(tags['"+napTag+"']), priority=tostring(properties.priority)")
 	}
+	if len(ips) > 0 {
+		// The VM behind each address agents logged in to, through its NIC.
+		parts = append(parts, "Resources | where type =~ 'microsoft.network/publicipaddresses'"+
+			" and tostring(properties.ipAddress) in ("+strings.Join(ips, ",")+")"+
+			" | project ip=tostring(properties.ipAddress),"+
+			" nic=tostring(split(tolower(tostring(properties.ipConfiguration.id)), '/ipconfigurations/')[0])"+
+			" | join kind=inner (Resources | where type =~ 'microsoft.compute/virtualmachines'"+
+			" | mv-expand n=properties.networkProfile.networkInterfaces"+
+			" | project nic=tolower(tostring(n.id)), "+cols+", vmSize=tostring(properties.hardwareProfile.vmSize),"+
+			" power=tostring(properties.extended.instanceView.powerState.code), priority=tostring(properties.priority)) on nic"+
+			" | project "+cols+", vmSize, power, priority, ip")
+	}
 	if len(parts) == 0 {
 		return ""
 	}
@@ -146,22 +200,29 @@ func Query(rs []Resource) string {
 }
 
 type graphRow struct {
-	Name   string `json:"name"`
-	Type   string `json:"type"`
-	Group  string `json:"resourceGroup"`
-	SKU    string `json:"sku"`
-	Cap    *int   `json:"cap"`
-	VMSize string `json:"vmSize"`
-	Power  string `json:"power"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Group    string `json:"resourceGroup"`
+	Location string `json:"location"`
+	K8s      string `json:"k8s"`
+	IP       string `json:"ip"` // set on rows that answer an SSH host
+	SKU      string `json:"sku"`
+	Cap      *int   `json:"cap"`
+	VMSize   string `json:"vmSize"`
+	Power    string `json:"power"`
 	// For machines made by node auto provisioning: their cluster.
 	Cluster  string `json:"aksCluster"`
 	Priority string `json:"priority"`
 	Pools    []struct {
-		Name   string `json:"name"`
-		Count  *int   `json:"count"`
-		VMSize string `json:"vmSize"`
-		Mode   string `json:"mode"`
-		Power  struct {
+		Name     string `json:"name"`
+		Count    *int   `json:"count"`
+		VMSize   string `json:"vmSize"`
+		Mode     string `json:"mode"`
+		Min      *int   `json:"minCount"`
+		Max      *int   `json:"maxCount"`
+		Auto     *bool  `json:"enableAutoScaling"`
+		Priority string `json:"scaleSetPriority"`
+		Power    struct {
 			Code string `json:"code"`
 		} `json:"powerState"`
 	} `json:"pools"`
@@ -179,7 +240,12 @@ func Match(rs []Resource, reply []byte) (map[string]Live, error) {
 	}
 	found := map[string][]graphRow{}
 	nodes := map[string][]graphRow{} // cluster name to its auto-provisioned machines
+	ips := map[string]graphRow{}
 	for _, g := range out.Data {
+		if g.IP != "" {
+			ips[g.IP] = g
+			continue
+		}
 		if g.Cluster != "" {
 			nodes[strings.ToLower(g.Cluster)] = append(nodes[strings.ToLower(g.Cluster)], g)
 			continue
@@ -192,6 +258,16 @@ func Match(rs []Resource, reply []byte) (map[string]Live, error) {
 	live := map[string]Live{}
 	for _, r := range rs {
 		if !Checkable(r) {
+			continue
+		}
+		if r.Kind == "SSH host" {
+			// An address that is not a VM's could be anything, so its
+			// absence says nothing.
+			if g, ok := ips[r.Name]; ok {
+				l := describe(g, nil, complete)
+				l.VM = g.Name
+				live[r.ID()] = l
+			}
 			continue
 		}
 		cands := found[armType(r)+"/"+strings.ToLower(r.Name)]
@@ -223,7 +299,7 @@ func pick(cands []graphRow, scope string) graphRow {
 }
 
 func describe(g graphRow, nodes []graphRow, complete bool) Live {
-	l := Live{Found: true, Group: g.Group}
+	l := Live{Found: true, Group: g.Group, Location: g.Location, VMSize: g.VMSize, Spot: strings.EqualFold(g.Priority, "spot"), Version: g.K8s}
 	switch p := strings.ToLower(strings.TrimPrefix(g.Power, "PowerState/")); p {
 	case "":
 	case "stopped":
@@ -237,9 +313,13 @@ func describe(g graphRow, nodes []graphRow, complete bool) Live {
 	switch {
 	case g.VMSize != "":
 		l.Size = shortSize(g.VMSize)
+		if l.Spot {
+			l.Size += " spot"
+		}
 	case len(g.Pools) > 0:
 		var ps []string
 		for _, p := range g.Pools {
+			l.Pools = append(l.Pools, pool(p.Name, p.Mode, p.VMSize, p.Count, p.Min, p.Max, p.Auto, p.Priority, p.Power.Code))
 			switch {
 			case p.Mode == "Machines" && complete:
 				ps = append(ps, machines(nodes)...)
@@ -253,11 +333,34 @@ func describe(g graphRow, nodes []graphRow, complete bool) Live {
 		if l.Size == "" {
 			l.Size = "no nodes"
 		}
+		for _, n := range nodes {
+			l.Machines = append(l.Machines, Machine{Name: n.Name, Size: n.VMSize, Spot: strings.EqualFold(n.Priority, "spot"),
+				Running: strings.HasSuffix(strings.ToLower(n.Power), "running")})
+		}
+		sort.Slice(l.Machines, func(i, j int) bool { return l.Machines[i].Name < l.Machines[j].Name })
 	case g.Cap != nil && strings.Contains(g.Type, "virtualmachinescalesets"):
 		l.Size = fmt.Sprintf("%d× %s", *g.Cap, shortSize(g.SKU))
 	}
 	return l
 }
+
+func pool(name, mode, size string, count, lo, hi *int, auto *bool, prio, power string) Pool {
+	p := Pool{Name: name, Mode: mode, Size: size, Spot: strings.EqualFold(prio, "spot"), Stopped: strings.EqualFold(power, "stopped")}
+	if count != nil {
+		p.Count = *count
+	}
+	if lo != nil {
+		p.Min = *lo
+	}
+	if hi != nil {
+		p.Max = *hi
+	}
+	p.Auto = auto != nil && *auto
+	return p
+}
+
+// ShortSize drops the Standard_ prefix from a VM size.
+func ShortSize(s string) string { return shortSize(s) }
 
 func shortSize(s string) string {
 	return strings.TrimPrefix(s, "Standard_")

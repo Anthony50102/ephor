@@ -183,6 +183,9 @@ func (m Model) enterCard() (tea.Model, tea.Cmd) {
 			m.expanded[c.id] = true
 		}
 		m.followCard()
+		if m.expanded[c.id] && strings.HasPrefix(c.id, "res:") {
+			return m, m.maybeKube(false)
+		}
 	}
 	return m, nil
 }

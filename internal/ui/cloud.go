@@ -157,6 +157,21 @@ func shortKind(k string) string {
 // the plain width.
 func (m Model) cloudStatus(r cloud.Row) (string, int) {
 	did := r.Resource.Status() + " " + core.Ago(r.Last, m.opt.Now())
+	cost := ""
+	if usd, ok := r.Hourly(m.prices); ok && usd > 0 {
+		cost = money(usd) + "/h"
+	} else if usd > 0 {
+		cost = "≥" + money(usd) + "/h"
+	}
+	s, n := m.cloudStatus0(r, did)
+	if cost != "" {
+		s = sText.Render(cost) + sSubtle.Render(" · ") + s
+		n += len([]rune(cost)) + 3
+	}
+	return s, n
+}
+
+func (m Model) cloudStatus0(r cloud.Row, did string) (string, int) {
 	now := r.Status()
 	if now == r.Resource.Status() || (r.Deleted && r.Gone()) {
 		now = ""
@@ -171,8 +186,11 @@ func (m Model) cloudStatus(r cloud.Row) (string, int) {
 		return sMuted.Render(did), len(did)
 	}
 	didStyle := sMuted
-	if r.Gone() {
+	switch {
+	case r.Gone():
 		didStyle = sSubtle
+	case r.Billing() && m.untouched(r):
+		didStyle = sAmber // paying for something no agent has touched lately
 	}
 	if now == "" {
 		return didStyle.Render(did), len(did)
@@ -186,15 +204,18 @@ func (m Model) cloudStatus(r cloud.Row) (string, int) {
 	case r.Gone():
 		st = sSubtle
 	}
-	return st.Render(now) + sSubtle.Render(" · ") + didStyle.Render(did), len([]rune(now)) + 3 + len(did)
+	return st.Render(now) + sSubtle.Render(" · ") + didStyle.Render(did), len([]rune(now)) + 3 + len([]rune(did))
 }
 
 // cloudSection renders the CLOUD block for a project brief or a session.
-func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []string {
+// In a brief each resource is a card, and so is the line that shows the
+// rest; card ranges are relative to the returned lines.
+func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) ([]string, []cardRef) {
 	rows, note := m.cloudRows(ss)
 	if len(rows) == 0 && note == "" {
-		return nil
+		return nil, nil
 	}
+	var cards []cardRef
 	sub := "named in commands the agents ran"
 	switch {
 	case m.liveErr != "":
@@ -207,6 +228,12 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []strin
 	lines := []string{"", section("INFRASTRUCTURE", sub)}
 	if compact {
 		lines[1] = sKicker.Render("CLOUD") + sSubtle.Render("  this session")
+	}
+	if !compact {
+		if n := m.untouchedCount(rows); n > 0 {
+			lines = append(lines, sAmber.Render("! ")+sText.Render(plural(n, "running resource")+" no agent has touched in "+untouchedWords)+
+				sSubtle.Render(" (amber below) - still needed?"))
+		}
 	}
 	// Everything costing money is listed, however many; the rest fills up
 	// to max.
@@ -227,11 +254,11 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []strin
 	}
 	grouped := !compact && len(picked) > 0 && picked[0].Bucket() != picked[len(picked)-1].Bucket()
 	for i, r := range picked {
-		if grouped && (i == 0 || r.Bucket() != picked[i-1].Bucket()) {
+		if !compact && (i == 0 || r.Bucket() != picked[i-1].Bucket()) && (grouped || r.Bucket() == cloud.InBilling) {
 			if i > 0 {
 				lines = append(lines, "")
 			}
-			lines = append(lines, bucketHead(r.Bucket()))
+			lines = append(lines, spread(bucketHead(r.Bucket()), m.bucketCost(rows, r.Bucket()), w))
 		}
 		right, rw := m.cloudStatus(r)
 		name := sText
@@ -255,7 +282,17 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []strin
 				left += "  " + sSubtle.Render(trunc(where, rest))
 			}
 		}
+		start := len(lines)
 		lines = append(lines, spread(left, right, w))
+		if compact {
+			continue
+		}
+		id := resCard(r)
+		if m.open(id) {
+			lines = append(lines, indent(m.resourceDetail(r, w-4), 4)...)
+			lines = append(lines, "")
+		}
+		cards = append(cards, cardRef{id: id, start: start, end: len(lines)})
 	}
 	var more []string
 	if hidden := len(rows) - len(picked); hidden > 0 {
@@ -264,10 +301,15 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []strin
 	if note != "" {
 		more = append(more, note)
 	}
-	if len(more) > 0 {
+	switch {
+	case len(more) > 0:
+		cards = append(cards, cardRef{id: "cloud", start: len(lines), end: len(lines) + 1})
 		lines = append(lines, sSubtle.Render(trunc("+ "+strings.Join(more, ", "), w)))
+	case !compact && m.open("cloud") && len(rows) > 6:
+		cards = append(cards, cardRef{id: "cloud", start: len(lines), end: len(lines) + 1})
+		lines = append(lines, sSubtle.Render("show fewer"))
 	}
-	return lines
+	return lines, cards
 }
 
 func bucketHead(b cloud.Bucket) string {

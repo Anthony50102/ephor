@@ -24,6 +24,11 @@ type Resource struct {
 	Last    time.Time `json:"last"`
 	Count   int       `json:"count"`
 	By      []string  `json:"by,omitempty"` // sessions, filled in by Merge
+
+	// The latest way an agent reached it; see Touch.
+	SSH    string `json:"ssh,omitempty"`
+	Tunnel string `json:"tunnel,omitempty"`
+	Kube   string `json:"kube,omitempty"`
 }
 
 // scoped kinds have names that are only unique within their parent.
@@ -79,13 +84,14 @@ func (r Resource) Status() string {
 }
 
 func apply(list []Resource, t Touch, at time.Time) []Resource {
-	r := Resource{Kind: t.Kind, Name: t.Name, Scope: t.Scope}
+	r := Resource{Kind: t.Kind, Name: t.Name, Scope: t.Scope, SSH: t.SSH, Tunnel: t.Tunnel, Kube: t.Kube}
 	id := r.ID()
 	for i := range list {
 		if list[i].ID() != id {
 			continue
 		}
 		p := &list[i]
+		p.takeAccess(r, !at.Before(p.Last))
 		if at.After(p.Last) {
 			p.Last = at
 		}
@@ -130,6 +136,7 @@ func Merge(bySession map[string][]Resource) []Resource {
 				continue
 			}
 			p := &out[i]
+			p.takeAccess(r, r.Last.After(p.Last))
 			p.Count += r.Count
 			p.Created = p.Created || r.Created
 			if r.Last.After(p.Last) {
@@ -164,7 +171,7 @@ func Sort(rs []Resource) {
 // ---- index ----
 
 // version changes whenever parsing changes, so old offsets are rescanned.
-const version = 3
+const version = 4
 
 // Index remembers how far each session log has been read and what it found,
 // so that a log of several gigabytes is read once and then only its tail.
@@ -177,6 +184,7 @@ type Index struct {
 type Log struct {
 	Offset    int64      `json:"offset"`
 	Resources []Resource `json:"resources,omitempty"`
+	State     State      `json:"state"`
 }
 
 // LoadIndex reads an index, returning an empty one when it is missing,
@@ -262,7 +270,7 @@ func (ix *Index) Scan(path string) (changed bool, err error) {
 		}
 		off += int64(len(line))
 		for _, c := range lineCommands(line) {
-			for _, t := range Parse(c.cmd) {
+			for _, t := range ParseWith(c.cmd, &l.State) {
 				l.Resources = apply(l.Resources, t, c.at)
 			}
 		}

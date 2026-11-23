@@ -92,7 +92,8 @@ With the sessions panel hidden, the list moves into the bottom of the brief.
 | `n` `t` `e` `r` `d` | new project, new thread, describe, rename, delete |
 | `/` | filter sessions (`esc` clears); `space space` searches all |
 | `u` / `space s` | refresh now / rewrite this project's summary |
-| `space c` | check cloud resources with Azure now |
+| `y` / `s` on an INFRASTRUCTURE row | copy how to reach the machine or cluster / open a shell on it in a new tmux window |
+| `space c` | check cloud resources with Azure (and open clusters with kubectl) now |
 | `:q`, `:new <name>`, `:help` | command line |
 | `space`, `?` | which-key menu, all keys |
 
@@ -242,7 +243,8 @@ Limits:
 - Only kinds whose logged name is the real Azure name are checked: VMs, scale
   sets, AKS, AI accounts, registries, storage, key vaults, container apps, web
   apps, and resource groups. Model deployments, Kubernetes jobs, and SSH hosts
-  are not.
+  are not, except that an SSH address is matched to the VM whose public IP
+  it is.
 - A kubectl cluster is matched to AKS by its context or kubeconfig name. If
   those differ, it is just not checked.
 - "gone" can also mean the resource is in a subscription you cannot read.
@@ -251,9 +253,51 @@ Limits:
 `az` is missing. `switchboard cloud` and `summarize` use it too, and the
 summarizer is told what Azure said.
 
+### Cost
+
+Each running row shows what it costs an hour, and the **Running, costing
+money** header totals it per hour and per day. Prices come from the public
+[Azure retail price list](https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices)
+(no login), are cached in `prices.json` for a week, and are fetched only for
+sizes that are running. They are Linux pay-as-you-go list prices for compute
+only: no reservations, savings plans, or enterprise discounts, and no disks,
+IPs, or network. Spot machines use the spot list price, which moves. Treat the
+figure as "about this much", not a bill. A `≥` or "at least" means a size had
+no listed price. Cost Management would be exact but lags about a day.
+
+A running resource that no agent has touched for 12 hours is flagged amber,
+with a count above the list: it may be something left on.
+
+### Expanding a row
+
+Press `enter` on an INFRASTRUCTURE row to see more:
+
+- **Where and size:** group, region, Kubernetes version, public address,
+  subscription, and price.
+- **Log in** (VMs): the exact commands an agent last used. When it reached the
+  VM through `az network bastion tunnel` and then `ssh -p <port> ...@127.0.0.1`,
+  the two are linked by the local port. If no agent logged in, it suggests
+  `az ssh vm` and says so. `y` copies a one-liner (tunnel in the background,
+  ssh, close the tunnel; just the ssh if the tunnel port is already open) and
+  `s` runs it in a new tmux window.
+- **Nodes** (clusters): node pools from Azure with count, size, autoscale
+  range, and price, and under each pool its nodes from `kubectl get nodes`:
+  ready or not, GPUs, uptime, and the job pods on it. Machines made by node
+  auto provisioning sit under that pool. Pods waiting for a node are counted
+  with the reason.
+- **Workloads** (clusters): the jobs and deployments agents started or touched,
+  with what kubectl says now (running, complete, failed and why, ready
+  replicas, or gone), plus a count of other jobs in the same namespaces.
+- **Shell on a node:** `kubectl debug node/<node> -it --image=...busybox`,
+  which gives a root shell with the node's filesystem at `/host`. `y` copies
+  it for the first GPU node; `s` opens a window that lists nodes and leaves
+  the command typed, waiting for a node name.
+
+kubectl runs only for cluster rows you expand, with the same `--kubeconfig`
+or `--context` the agent used (else a context named after the AKS cluster),
+again every minute while open, and on `space c`. It only reads. It is off
+when `kubectl` is not installed or with `--live off`.
+
 ## Not yet
 
-- Cost figures. Cost Management lags about a day, so sizes and power state
-  stand in for now.
-- Checking Kubernetes jobs with `kubectl`.
 - Starting Claude Code from the panel (`i` already works with it).

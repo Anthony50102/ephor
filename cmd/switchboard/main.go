@@ -81,9 +81,17 @@ Flags:
 
 	switch fs.Arg(0) {
 	case "":
-		target, err := ui.Run(src, ui.Options{Store: st, StatePath: *statePath,
+		opt := ui.Options{Store: st, StatePath: *statePath,
 			Summarize: run, SummaryPath: filepath.Join(dir, "summaries.json"), SummaryEvery: *every,
-			CloudPath: filepath.Join(dir, "cloud.json"), CheckLive: check})
+			CloudPath: filepath.Join(dir, "cloud.json"), CheckLive: check,
+			PricePath: filepath.Join(dir, "prices.json"), Copy: ui.Clipboard}
+		if check != nil {
+			opt.Prices = cloud.HTTPGetter()
+		}
+		if _, err := exec.LookPath("kubectl"); err == nil && *liveFlag != "off" {
+			opt.Kubectl = cloud.RealKubectl()
+		}
+		target, err := ui.Run(src, opt)
 		if err != nil {
 			fail(err)
 		}
