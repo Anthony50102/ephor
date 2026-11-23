@@ -49,6 +49,9 @@ const (
 	aCheckCloud
 	aLaunch
 	aReply
+	aToggleSide
+	aToggleRight
+	aZen
 )
 
 var normalKeys = map[string]action{
@@ -81,7 +84,9 @@ var prefixes = map[string][]keyHint{
 		{"i", "type to the session", aReply},
 		{"n", "new project", aNewProject},
 		{"t", "new thread", aNewThread},
-		{"e", "describe project", aDescribe},
+		{"e", "toggle projects panel", aToggleSide},
+		{"l", "toggle sessions panel", aToggleRight},
+		{"z", "zen: hide both panels", aZen},
 		{"r", "rename", aRename},
 		{"d", "delete", aDelete},
 		{"m", "move session to a project", aMove},
@@ -139,39 +144,56 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 	case aHelp:
 		m.mode = modeHelp
 	case aFocusToggle:
-		if m.focus == focusSide {
+		switch m.focus {
+		case focusSide:
+			m.focus = focusCenter
+		case focusCenter:
 			m.focus = focusSessions
-		} else {
+		default:
 			m.focus = focusSide
+			m.fixFocus()
 		}
 	case aFocusSide:
-		m.focus = focusSide
+		m.focusLeft()
 	case aFocusSessions:
-		m.focus = focusSessions
-	case aDown:
-		if m.focus == focusSide {
-			m.setSide(m.sideIdx + 1)
-		} else {
-			m.selectSession(m.sessIdx + 1)
+		m.focusRight()
+	case aDown, aUp:
+		dir := 1
+		if a == aUp {
+			dir = -1
 		}
-	case aUp:
-		if m.focus == focusSide {
-			m.setSide(m.sideIdx - 1)
-		} else {
-			m.selectSession(m.sessIdx - 1)
+		switch m.focus {
+		case focusSide:
+			m.setSide(m.sideIdx + dir)
+		case focusCenter:
+			m.moveCard(dir)
+		default:
+			m.selectSession(m.sessIdx + dir)
 		}
 	case aTop:
-		if m.focus == focusSide {
+		switch m.focus {
+		case focusSide:
 			m.setSide(0)
-		} else {
+		case focusCenter:
+			m.firstCard()
+		default:
 			m.selectSession(0)
 		}
 	case aBottom:
-		if m.focus == focusSide {
+		switch m.focus {
+		case focusSide:
 			m.setSide(len(m.side) - 1)
-		} else {
+		case focusCenter:
+			m.lastCard()
+		default:
 			m.selectSession(len(m.visible()) - 1)
 		}
+	case aToggleSide:
+		m.toggleSide()
+	case aToggleRight:
+		m.toggleRight()
+	case aZen:
+		m.toggleZen()
 	case aHalfDown:
 		m.scrollCenter(m.height / 2)
 	case aHalfUp:
@@ -189,11 +211,13 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 	case aPrevNeeds:
 		m.stepNeedsYou(-1)
 	case aEnter:
-		if m.focus == focusSide {
-			if len(m.visible()) > 0 {
-				m.focus = focusSessions
-			}
+		switch m.focus {
+		case focusSide:
+			m.focus = focusCenter
+			m.firstCard()
 			return m, nil
+		case focusCenter:
+			return m.enterCard()
 		}
 		return m.jump()
 	case aMove:
@@ -229,6 +253,11 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		m.focus = focusSessions
 		m.startInput(inFilter, "", "", "", "")
 	case aEsc:
+		if m.focus == focusCenter && m.expanded[m.cardID] {
+			delete(m.expanded, m.cardID)
+			m.followCard()
+			return m, nil
+		}
 		m.filter = ""
 		m.syncSelection()
 	case aRefresh:

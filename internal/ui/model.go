@@ -22,6 +22,7 @@ type focus int
 
 const (
 	focusSide focus = iota
+	focusCenter
 	focusSessions
 )
 
@@ -119,6 +120,10 @@ type Model struct {
 	sessIdx       int
 	selKey        string
 	centerOff     int
+	cardID        string          // highlighted card in the middle pane
+	expanded      map[string]bool // cards opened with enter
+	hideSide      bool
+	hideRight     bool
 	filter        string
 	pending       string // first key of a multi-key sequence
 
@@ -185,7 +190,7 @@ func New(opt Options) Model {
 	if opt.LiveEvery == 0 {
 		opt.LiveEvery = DefaultLiveEvery
 	}
-	m := Model{opt: opt, st: opt.Store, input: ti, newSince: map[string]time.Time{}, width: 120, height: 40}
+	m := Model{opt: opt, st: opt.Store, input: ti, newSince: map[string]time.Time{}, expanded: map[string]bool{}, width: 120, height: 40}
 	m.sums = &summary.Cache{Projects: map[string]summary.Summary{}}
 	if opt.SummaryPath != "" {
 		m.sums = summary.LoadCache(opt.SummaryPath)
@@ -421,6 +426,7 @@ func (m *Model) setSide(i int) {
 	}
 	m.sideIdx = i
 	m.centerOff = 0
+	m.cardID = ""
 	m.filter = ""
 	m.sessIdx = 0
 	m.syncSelectionTo("")

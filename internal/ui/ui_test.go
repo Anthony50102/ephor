@@ -117,6 +117,23 @@ func (h *harness) typeText(s string) {
 
 func (h *harness) screen() string { return ansi.Strip(h.m.View()) }
 
+func (h *harness) mustNotSee(part string) {
+	h.t.Helper()
+	if strings.Contains(h.screen(), part) {
+		h.t.Fatalf("screen should not contain %q:\n%s", part, h.screen())
+	}
+}
+
+// change edits the state file as another instance would and reloads it.
+func (h *harness) change(fn func(*store.State)) {
+	h.t.Helper()
+	if _, err := store.Update(h.path, func(st *store.State) error { fn(st); return nil }); err != nil {
+		h.t.Fatal(err)
+	}
+	h.m.stamp = ""
+	h.m.reload()
+}
+
 func (h *harness) mustSee(parts ...string) {
 	h.t.Helper()
 	s := h.screen()
@@ -198,7 +215,7 @@ func TestNextNeedsYouCyclesAcrossScopesAndJumps(t *testing.T) {
 
 func TestJumpOutsideTmuxQuitsWithTarget(t *testing.T) {
 	h := newHarness(t, []core.Session{session("a", "alpha", agents.Working, time.Minute, 4)}, false)
-	h.keys("tab")
+	h.keys("tab", "tab")
 	cmd := h.send(tea.KeyMsg{Type: tea.KeyEnter})
 	if h.m.JumpTarget == nil || h.m.JumpTarget.WindowIndex != 4 || cmd == nil {
 		t.Fatal("outside tmux, enter should quit and hand back the pane to attach")
@@ -317,12 +334,16 @@ func TestVimKeys(t *testing.T) {
 		t.Fatalf("gg should select the first session, got %q", h.m.selKey)
 	}
 	h.keys("ctrl+h")
+	if h.m.focus != focusCenter {
+		t.Fatal("ctrl-h from the sessions should focus the middle")
+	}
+	h.keys("ctrl+h")
 	if h.m.focus != focusSide {
 		t.Fatal("ctrl-h should focus the projects column")
 	}
-	h.keys("ctrl+l")
+	h.keys("ctrl+l", "ctrl+l")
 	if h.m.focus != focusSessions {
-		t.Fatal("ctrl-l should focus the sessions column")
+		t.Fatal("ctrl-l twice should focus the sessions column")
 	}
 
 	h.keys("]", "x")
@@ -354,7 +375,7 @@ func TestScrollMiddlePane(t *testing.T) {
 	h := newHarness(t, ss, true)
 	h.send(tea.WindowSizeMsg{Width: 160, Height: 20})
 	h.mustSee("more · ctrl-d or wheel")
-	lines, _ := h.m.centerLines(h.m.layout())
+	lines := h.m.centerPage(h.m.layout()).lines
 	end := len(lines) - h.m.layout().bodyH + 1
 
 	for i := 0; i < 20; i++ {
@@ -593,5 +614,86 @@ func TestTypeToSession(t *testing.T) {
 	h.keys("esc")
 	if h.m.mode != modeNormal || strings.Contains(h.screen(), "TYPING TO") {
 		t.Fatal("esc did not leave typing mode")
+	}
+}
+
+func TestCardsAndPanels(t *testing.T) {
+	a := session("a", "alpha", agents.NeedsYou, time.Minute, 1)
+	a.Info.Reason = "Approve the migration"
+	b := session("b", "beta", agents.Working, time.Minute, 2)
+	c := session("c", "gamma", agents.Working, 2*time.Minute, 3)
+	h := newHarness(t, []core.Session{a, b, c}, true)
+	p := h.seedProject("Nabu", "a", now)
+	h.change(func(st *store.State) {
+		st.AssignSession("b", p.ID, "", "beta", now)
+		st.AssignSession("c", p.ID, "", "gamma", now)
+	})
+
+	// Overview: enter on the projects panel focuses the cards; enter on a
+	// project card opens the project.
+	h.keys("enter")
+	if h.m.focus != focusCenter || h.m.cardID != "needs:a" || h.m.selKey != "a" {
+		t.Fatalf("enter should highlight the first card, got focus %d card %q sel %q", h.m.focus, h.m.cardID, h.m.selKey)
+	}
+	h.keys("G")
+	if h.m.cardID != "proj:"+p.ID {
+		t.Fatalf("G should highlight the last card, got %q", h.m.cardID)
+	}
+	h.keys("enter")
+	if h.m.scope().pid != p.ID || h.m.focus != focusCenter {
+		t.Fatal("enter on a project card should open the project")
+	}
+
+	// Project: step to a session card, expand it, collapse it.
+	h.keys("g", "g")
+	var ids []string
+	for i := 0; i < 6; i++ {
+		ids = append(ids, h.m.cardID)
+		h.keys("j")
+	}
+	if !strings.Contains(strings.Join(ids, " "), "sess:b") {
+		t.Fatalf("cards visited: %v", ids)
+	}
+	h.keys("g", "g")
+	for h.m.cardID != "sess:b" {
+		h.keys("j")
+	}
+	if h.m.selKey != "b" {
+		t.Fatal("highlighting a session card should select its session")
+	}
+	center := func() string { return ansi.Strip(strings.Join(h.m.centerPage(h.m.layout()).lines, "\n")) }
+	if strings.Contains(center(), "0:2 beta") {
+		t.Fatal("collapsed card shows detail")
+	}
+	h.keys("enter")
+	if !strings.Contains(center(), "0:2 beta") {
+		t.Fatal("enter should expand the session card")
+	}
+	h.keys("esc")
+	if strings.Contains(center(), "0:2 beta") {
+		t.Fatal("esc should collapse the card")
+	}
+
+	// Panels.
+	h.keys("space", "e")
+	if h.m.layout().sideW != 0 || strings.Contains(h.screen(), "WORKSPACE") {
+		t.Fatal("space e should hide the projects panel")
+	}
+	h.keys("h")
+	if h.m.focus != focusCenter {
+		t.Fatal("h should not focus a hidden panel")
+	}
+	h.keys("space", "l")
+	if h.m.layout().wide {
+		t.Fatal("space l should hide the sessions panel")
+	}
+	h.mustSee("SESSIONS")
+	h.keys("space", "z")
+	if h.m.hideSide || h.m.hideRight {
+		t.Fatal("space z with both hidden should show both")
+	}
+	h.keys("space", "z")
+	if !h.m.hideSide || !h.m.hideRight {
+		t.Fatal("space z should hide both")
 	}
 }

@@ -178,11 +178,16 @@ func paint(s string, c lipgloss.Color) string {
 // card is a raised block with a colored bar down its left edge. Content
 // lines should fit in w-4 columns.
 func card(c lipgloss.Color, w int, lines []string) []string {
+	return cardOn(c, cRaised, w, lines)
+}
+
+// cardOn is a card on background bg.
+func cardOn(c, bg lipgloss.Color, w int, lines []string) []string {
 	bar := lipgloss.NewStyle().Foreground(c).Render("▌")
-	blank := bar + paint(strings.Repeat(" ", w-1), cRaised)
+	blank := bar + paint(strings.Repeat(" ", w-1), bg)
 	out := []string{blank}
 	for _, l := range lines {
-		out = append(out, bar+paint(pad("  "+l, w-2)+" ", cRaised))
+		out = append(out, bar+paint(pad("  "+l, w-2)+" ", bg))
 	}
 	return append(out, blank)
 }

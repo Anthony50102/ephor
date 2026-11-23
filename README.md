@@ -68,14 +68,25 @@ presses Enter. `esc` returns to the panel.
 Keys follow LazyVim and the Snacks explorer. Press `space` for a which-key menu
 of actions.
 
+The screen has three panels: projects on the left, the brief in the middle,
+and sessions on the right. The brief is a column of cards. Focus it with `l`
+or `enter`, step through cards with `j` / `k`, and press `enter` to open a
+project or thread card or to expand any other card in place. Highlighting a
+session card also selects that session, so `i`, `m`, and `a` act on it. Hide
+the side panels the way you would in LazyVim: `space e` for the projects panel
+(like the explorer), `space l` for the sessions list, and `space z` for both.
+With the sessions panel hidden, the list moves into the bottom of the brief.
+
 | Key | Action |
 | --- | --- |
-| `j` / `k`, `gg` / `G` | move in the focused list |
-| `h` / `l`, `ctrl-h` / `ctrl-l`, `tab` | projects column / sessions column |
+| `j` / `k`, `gg` / `G` | move in the focused panel: projects, cards, or sessions |
+| `h` / `l`, `ctrl-h` / `ctrl-l`, `tab` | move one panel left / right, like `ctrl-w h` / `ctrl-w l` |
+| `enter` on a card | open a project or thread card; expand any other card (`esc` collapses) |
+| `space e` / `space l` / `space z` | toggle the projects panel / sessions panel / both (zen) |
 | `H` / `L` | previous / next project (like buffers) |
 | `]d` / `[d` | next / previous session that needs you (like diagnostics) |
 | `ctrl-d` / `ctrl-u`, `ctrl-e` / `ctrl-y`, mouse wheel | scroll the middle pane by half a page or a line. The wheel over the sidebar or session list moves the selection. Hold `shift` to select text with the mouse. |
-| `enter` | jump to the session's tmux window |
+| `enter` in the sessions panel | jump to the session's tmux window |
 | `i` / `o` | type to the session / start Copilot in this project or thread |
 | `m` / `a` | move session to a project / accept suggestion |
 | `n` `t` `e` `r` `d` | new project, new thread, describe, rename, delete |
