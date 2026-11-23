@@ -140,8 +140,9 @@ Things to know:
 
 ## Cloud resources
 
-The project brief and the session detail have a **CLOUD** section listing the
-cloud resources the agents worked with: VMs, AKS clusters and node pools,
+The project brief has an **INFRASTRUCTURE** section, and the session detail a
+shorter **CLOUD** list for that session alone, showing the cloud resources the
+agents worked with: VMs, AKS clusters and node pools,
 Kubernetes jobs, model deployments, registries, storage, SSH hosts, and so on.
 Each row says whether the agent created, used, or deleted it, and when.
 
@@ -186,8 +187,17 @@ It only reads. The rows then say what Azure says now:
 | `gone` | it no longer exists |
 
 The detail column shows the VM size or node pools (`2× D4as_v5 + auto nodes`)
-and the real resource group. Anything running or still billed moves to the
-top, however long ago an agent touched it.
+and the real resource group. The project brief groups rows by what they cost:
+
+1. **Running, costing money:** running, stopped but still billed, or a delete
+   that did not stick. These are always listed, however long ago an agent
+   touched them.
+2. **Stopped:** deallocated VMs and stopped clusters, which are cleanup
+   candidates.
+3. **Used recently:** everything else that still exists or was not checked.
+4. **Gone:** deleted.
+
+Within a group, the most recently used comes first.
 
 Limits:
 

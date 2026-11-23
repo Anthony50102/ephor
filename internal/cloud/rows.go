@@ -42,6 +42,34 @@ func (r Row) Status() string {
 	return r.Live.Word()
 }
 
+// Bucket says how much attention a row deserves, in display order.
+type Bucket int
+
+const (
+	InBilling Bucket = iota // running or holding hardware, or a delete that did not stick
+	InStopped               // exists but off: cheap, and a cleanup candidate
+	InUse                   // everything else that still exists, or that Azure was not asked about
+	InGone                  // deleted
+)
+
+// Label names a bucket for a heading.
+func (b Bucket) Label() string {
+	return [...]string{"Running, costing money", "Stopped", "Used recently", "Gone"}[b]
+}
+
+// Bucket puts the row in a group.
+func (r Row) Bucket() Bucket {
+	switch {
+	case r.Billing() || r.Status() == "delete failed?":
+		return InBilling
+	case r.Gone():
+		return InGone
+	case r.Live != nil && (r.Live.State == "deallocated" || r.Live.State == "stopped" || r.Live.State == "deallocating"):
+		return InStopped
+	}
+	return InUse
+}
+
 // Where is the detail column: size and workloads, else the resource group.
 func (r Row) Where() string {
 	var parts []string
@@ -141,19 +169,10 @@ func Rows(rs []Resource, live map[string]Live) ([]Row, string) {
 		r.Detail = strings.Join(parts, " · ")
 	}
 	rows = foldAKS(rows)
-	// Whatever is costing money comes first, however old; then recent
-	// work; then what no longer exists.
-	tier := func(r Row) int {
-		switch {
-		case r.Billing() || r.Status() == "delete failed?":
-			return 0
-		case r.Gone():
-			return 2
-		}
-		return 1
-	}
+	// Whatever is costing money comes first, however old; then what is
+	// stopped; then recent work; then what no longer exists.
 	sort.SliceStable(rows, func(i, j int) bool {
-		if ti, tj := tier(rows[i]), tier(rows[j]); ti != tj {
+		if ti, tj := rows[i].Bucket(), rows[j].Bucket(); ti != tj {
 			return ti < tj
 		}
 		return rows[i].Last.After(rows[j].Last)

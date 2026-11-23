@@ -206,23 +206,33 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []strin
 	}
 	lines := []string{"", section("INFRASTRUCTURE", sub)}
 	if compact {
-		lines[1] = sKicker.Render("CLOUD")
+		lines[1] = sKicker.Render("CLOUD") + sSubtle.Render("  this session")
+	}
+	// Everything costing money is listed, however many; the rest fills up
+	// to max.
+	var picked []cloud.Row
+	for _, r := range rows {
+		if r.Bucket() == cloud.InBilling || len(picked) < max {
+			picked = append(picked, r)
+		}
 	}
 	nameW := 0
-	for i, r := range rows {
-		if i < max && len([]rune(r.Name)) > nameW {
+	for _, r := range picked {
+		if len([]rune(r.Name)) > nameW {
 			nameW = len([]rune(r.Name))
 		}
 	}
 	if nameW > 30 {
 		nameW = 30
 	}
-	shown := 0
-	for _, r := range rows {
-		if shown == max {
-			break
+	grouped := !compact && len(picked) > 0 && picked[0].Bucket() != picked[len(picked)-1].Bucket()
+	for i, r := range picked {
+		if grouped && (i == 0 || r.Bucket() != picked[i-1].Bucket()) {
+			if i > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, bucketHead(r.Bucket()))
 		}
-		shown++
 		right, rw := m.cloudStatus(r)
 		name := sText
 		if r.Gone() {
@@ -248,8 +258,8 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []strin
 		lines = append(lines, spread(left, right, w))
 	}
 	var more []string
-	if hidden := len(rows) - shown; hidden > 0 {
-		more = append(more, fmt.Sprintf("%d older", hidden))
+	if hidden := len(rows) - len(picked); hidden > 0 {
+		more = append(more, fmt.Sprintf("%d more", hidden))
 	}
 	if note != "" {
 		more = append(more, note)
@@ -258,4 +268,16 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) []strin
 		lines = append(lines, sSubtle.Render(trunc("+ "+strings.Join(more, ", "), w)))
 	}
 	return lines
+}
+
+func bucketHead(b cloud.Bucket) string {
+	switch b {
+	case cloud.InBilling:
+		return sGreen.Render("● ") + sGreen.Bold(true).Render(b.Label())
+	case cloud.InStopped:
+		return sMuted.Render("○ " + b.Label())
+	case cloud.InGone:
+		return sSubtle.Render("✕ " + b.Label())
+	}
+	return sMuted.Render("◦ " + b.Label())
 }

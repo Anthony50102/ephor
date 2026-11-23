@@ -416,6 +416,7 @@ func TestCloudSection(t *testing.T) {
 		{Kind: "Kubernetes", Name: "aks1", Scope: "training", Last: now.Add(-2 * time.Hour), Count: 3},
 		{Kind: "Kubernetes job", Name: "sft", Scope: "aks1/training", Last: now.Add(-2 * time.Hour), Count: 1},
 		{Kind: "VM", Name: "old-box", Created: true, Deleted: true, Last: now.Add(-3 * time.Hour), Count: 2},
+		{Kind: "VM", Name: "spare", Scope: "rg-ml", Last: now.Add(-4 * time.Hour), Count: 1},
 		{Kind: "Azure network vnet", Name: "v", Created: true, Last: now, Count: 1},
 	}}})
 	h.keys("L")
@@ -424,7 +425,7 @@ func TestCloudSection(t *testing.T) {
 	h.mustSee("VM gpu-box", "k8s aks1")
 
 	in := h.m.summaryInput(h.m.scope().pid)
-	if len(in.Cloud) != 2 || in.Cloud[0] != "VM gpu-box (rg-ml), created by an agent" {
+	if len(in.Cloud) != 3 || in.Cloud[0] != "VM gpu-box (rg-ml), created by an agent" {
 		t.Fatalf("summary input cloud = %q", in.Cloud)
 	}
 
@@ -435,7 +436,8 @@ func TestCloudSection(t *testing.T) {
 		asked = q
 		return []byte(`{"data":[
 			{"name":"gpu-box","type":"Microsoft.Compute/virtualMachines","resourceGroup":"rg-real","vmSize":"Standard_NC24ads_A100_v4","power":"PowerState/running"},
-			{"name":"old-box","type":"microsoft.compute/virtualmachines","resourceGroup":"rg-ml","vmSize":"Standard_D4s_v5","power":"PowerState/deallocated"}]}`), nil
+			{"name":"old-box","type":"microsoft.compute/virtualmachines","resourceGroup":"rg-ml","vmSize":"Standard_D4s_v5","power":"PowerState/deallocated"},
+			{"name":"spare","type":"microsoft.compute/virtualmachines","resourceGroup":"rg-ml","vmSize":"Standard_D4s_v5","power":"PowerState/deallocated"}]}`), nil
 	}
 	h.keys("H")
 	h.cmd = nil
@@ -453,6 +455,12 @@ func TestCloudSection(t *testing.T) {
 		t.Fatalf("query = %s", asked)
 	}
 	h.mustSee("checked with Azure", "running · created 1h", "NC24ads_A100_v4 · rg-real", "delete failed? · deleted 3h")
+	// Rows group by what they cost: running, then stopped, then the rest.
+	scr := ansi.Strip(strings.Join(h.m.cloudSection(h.m.sessions, 100, 6, false), "\n"))
+	billing, stopped, used := strings.Index(scr, "Running, costing money"), strings.Index(scr, "○ Stopped"), strings.Index(scr, "Used recently")
+	if billing < 0 || stopped < billing || used < stopped || strings.Index(scr, "old-box") > stopped || strings.Index(scr, "spare") < stopped {
+		t.Fatalf("cloud rows are not grouped by cost:\n%s", scr)
+	}
 	in = h.m.summaryInput(h.m.scope().pid)
 	if in.Cloud[0] != "VM gpu-box (NC24ads_A100_v4 · rg-real), created by an agent, Azure says now: running" {
 		t.Fatalf("summary input cloud = %q", in.Cloud)
