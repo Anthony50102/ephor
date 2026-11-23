@@ -63,7 +63,16 @@ tmux, so they keep running when Switchboard closes.
 Press `i` on a session to type to it without leaving. The middle pane shows a
 live view of its terminal. `enter` sends your text and presses Enter, so `1`
 then `enter` answers a numbered approval prompt. `enter` on an empty line only
-presses Enter. `esc` returns to the panel.
+presses Enter. `esc` returns to the panel. It is for quick one-line answers.
+
+For real work, press `v` to dock the session: its actual tmux pane moves into
+Switchboard's window, on the right, and takes the keyboard. You are typing in
+the agent itself, with multi-line input, paste, and scrollback. Move between
+it and Switchboard with your usual tmux pane keys (`ctrl-h` / `ctrl-l` with
+vim-tmux-navigator). `v` again sends it back to its own window; `v` on another
+session swaps. Docking only moves the pane, so the agent never notices.
+Quitting Switchboard sends a docked agent back, and if Switchboard crashes,
+the next start sends it back. Docking needs Switchboard running inside tmux.
 
 Keys follow LazyVim and the Snacks explorer. Press `space` for a which-key menu
 of actions.
@@ -87,7 +96,8 @@ With the sessions panel hidden, the list moves into the bottom of the brief.
 | `]d` / `[d` | next / previous session that needs you (like diagnostics) |
 | `ctrl-d` / `ctrl-u`, `ctrl-e` / `ctrl-y`, mouse wheel | scroll the middle pane by half a page or a line. The wheel over the sidebar or session list moves the selection. Hold `shift` to select text with the mouse. |
 | `enter` in the sessions panel | jump to the session's tmux window |
-| `i` / `o` | type to the session / start Copilot in this project or thread |
+| `i` / `o` | type a quick answer to the session / start Copilot in this project or thread |
+| `v` | dock the session's real terminal beside Switchboard; `v` again sends it back |
 | `m` / `a` | move session to a project / accept suggestion |
 | `n` `t` `e` `r` `d` | new project, new thread, describe, rename, delete |
 | `/` | filter sessions (`esc` clears); `space space` searches all |

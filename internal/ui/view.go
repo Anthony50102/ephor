@@ -219,9 +219,22 @@ func (m Model) viewFooter(w int) string {
 	} else if m.focus == focusSide {
 		keys = [][2]string{{"j/k", "browse"}, {"H/L", "projects"}, {"]d", "next needs you"}, {"l", "sessions"}, {"n", "new project"}, {"e", "describe"}, {"space", "menu"}}
 	} else if m.focus == focusCenter {
-		keys = [][2]string{{"j/k", "cards"}, {"enter", "open or expand"}, {"esc", "collapse"}, {"i", "answer"}, {"y/s", "copy / open a shell"}, {"h/l", "panels"}, {"space e/l/z", "toggle panels"}, {"space", "menu"}}
+		keys = [][2]string{{"j/k", "cards"}, {"enter", "open or expand"}, {"esc", "collapse"}, {"i", "answer"}, {"v", "dock"}, {"y/s", "copy / open a shell"}, {"h/l", "panels"}, {"space e/l/z", "toggle panels"}, {"space", "menu"}}
 	} else {
-		keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"m", "move"}, {"a", "accept"}, {"]d", "next needs you"}, {"/", "filter"}, {"h", "projects"}, {"space", "menu"}}
+		keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"v", "dock"}, {"m", "move"}, {"a", "accept"}, {"]d", "next needs you"}, {"/", "filter"}, {"h", "projects"}, {"space", "menu"}}
+	}
+	if m.docked != "" && m.mode != modeOrganize {
+		label := "send back " + m.dockedTitle
+		if sel, ok := m.selected(); ok && sel.Pane.PaneID != m.docked {
+			label = "dock this instead"
+		}
+		keys = append([][2]string{{"v", label}}, keys...)
+		for i, k := range keys[1:] {
+			if k[0] == "v" {
+				keys = append(keys[:i+1], keys[i+2:]...)
+				break
+			}
+		}
 	}
 	var b []string
 	for _, k := range keys {
@@ -1067,7 +1080,7 @@ func (m Model) viewHelp(w int) []string {
 		keys  [][2]string
 	}{
 		{"MOVE", [][2]string{{"j / k", "down / up in the focused list"}, {"h l  ctrl-h ctrl-l", "move between panels (also tab)"}, {"j / k (middle)", "step through cards; enter opens or expands, esc collapses"}, {"space e / l / z", "toggle projects panel / sessions panel / both"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"gg / G", "top / bottom"}, {"ctrl-d / ctrl-u", "scroll the middle pane (ctrl-e / ctrl-y a line, or the wheel)"}}},
-		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"i", "type to the session without leaving"}, {"o", "start Copilot in this project or thread"}, {"y", "copy how to reach the highlighted machine or cluster"}, {"s", "open a shell on it in a new tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
+		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"i", "type to the session without leaving"}, {"v", "dock the session's real terminal beside Switchboard; v again sends it back"}, {"o", "start Copilot in this project or thread"}, {"y", "copy how to reach the highlighted machine or cluster"}, {"s", "open a shell on it in a new tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
 		{"PROJECTS", [][2]string{{"n", "new project"}, {"t", "new thread in this project"}, {"e", "describe what the project is for"}, {"r", "rename project or thread"}, {"d", "delete project or thread"}}},
 		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":help", "this screen"}}},
 		{"COLORS", [][2]string{{sAmber.Render("●"), "needs you: a question or approval is waiting"}, {sGreen.Render("●"), "working"}, {sCyan.Render("✓"), "finished and ready for your next instruction"}, {sSubtle.Render("○"), "quiet: nothing new in a day"}, {sNewTag.Render("new"), "finished since you last opened the project"}}},

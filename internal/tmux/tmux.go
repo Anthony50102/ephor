@@ -124,6 +124,96 @@ func (c Client) Pretype(paneID, text string) error {
 	return err
 }
 
+// homeOpt is a pane option holding where a docked pane came from, so it can
+// go back even after Switchboard restarts.
+const homeOpt = "@switchboard-home"
+
+// Dock moves an agent's pane into the host pane's window, to its right, and
+// selects it. width is a tmux size such as "60%".
+func (c Client) Dock(paneID, hostPane, width string) error {
+	out, err := c.Run("display-message", "-p", "-t", paneID, "#{session_id}"+sep+"#{window_id}"+sep+"#{window_index}"+sep+"#{window_name}")
+	if err != nil {
+		return err
+	}
+	home := strings.TrimSpace(out) + sep + hostPane
+	if _, err := c.Run("set-option", "-p", "-t", paneID, homeOpt, home); err != nil {
+		return err
+	}
+	if _, err := c.Run("join-pane", "-h", "-l", width, "-s", paneID, "-t", hostPane); err != nil {
+		c.Run("set-option", "-p", "-u", "-t", paneID, homeOpt)
+		return err
+	}
+	return nil
+}
+
+// Undock sends a docked pane back to its window, or to a new window at its
+// old index when that window closed with it, and leaves the host focused.
+func (c Client) Undock(paneID string) error {
+	out, err := c.Run("show-options", "-p", "-v", "-t", paneID, homeOpt)
+	if err != nil {
+		return err
+	}
+	f := strings.Split(strings.TrimSpace(out), sep)
+	if len(f) < 4 {
+		return fmt.Errorf("pane %s has no home to go back to", paneID)
+	}
+	session, window, index, name := f[0], f[1], f[2], f[3]
+	if c.windowExists(window) {
+		_, err = c.Run("join-pane", "-d", "-h", "-s", paneID, "-t", window)
+		if err != nil {
+			return err
+		}
+	} else if _, err := c.Run("break-pane", "-d", "-s", paneID, "-n", name, "-t", session+":"+index); err != nil {
+		// The index was taken meanwhile; any free one will do.
+		if _, err := c.Run("break-pane", "-d", "-s", paneID, "-n", name, "-t", session+":"); err != nil {
+			return err
+		}
+	}
+	_, err = c.Run("set-option", "-p", "-u", "-t", paneID, homeOpt)
+	return err
+}
+
+func (c Client) windowExists(id string) bool {
+	out, err := c.Run("list-windows", "-a", "-F", "#{window_id}")
+	if err != nil {
+		return false
+	}
+	for _, w := range strings.Fields(out) {
+		if w == id {
+			return true
+		}
+	}
+	return false
+}
+
+// Orphans lists docked panes whose Switchboard pane has closed, as after a
+// crash, so they can be sent back.
+func (c Client) Orphans() ([]string, error) {
+	out, err := c.Run("list-panes", "-a", "-F", "#{pane_id}"+sep+"#{"+homeOpt+"}")
+	if err != nil {
+		return nil, err
+	}
+	live := map[string]bool{}
+	homes := map[string][]string{}
+	for _, l := range strings.Split(out, "\n") {
+		id, home, _ := strings.Cut(l, sep)
+		if id == "" {
+			continue
+		}
+		live[id] = true
+		if home != "" {
+			homes[id] = strings.Split(home, sep)
+		}
+	}
+	var ids []string
+	for id, f := range homes {
+		if len(f) < 5 || !live[f[4]] {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
 // InsideTmux reports whether this process runs inside a tmux client.
 func InsideTmux() bool { return os.Getenv("TMUX") != "" }
 

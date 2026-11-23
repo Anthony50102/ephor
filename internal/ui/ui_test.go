@@ -798,3 +798,45 @@ func cloudID(h *harness, name string) string {
 	}
 	return "?"
 }
+
+func TestDockAgent(t *testing.T) {
+	a := session("a", "alpha", agents.Working, time.Minute, 1)
+	b := session("b", "beta", agents.Working, 2*time.Minute, 2)
+	h := newHarness(t, []core.Session{a, b}, true)
+	var log []string
+	h.m.opt.Dock = func(id string) error { log = append(log, "dock "+id); return nil }
+	h.m.opt.Undock = func(id string) error { log = append(log, "undock "+id); return nil }
+	h.m.focus = focusSessions
+	sel, _ := h.m.selected()
+	other := map[string]string{"%a": "%b", "%b": "%a"}[sel.Pane.PaneID]
+
+	h.keys("v")
+	h.mustSee("Docked " + sel.Title())
+	h.keys("u") // clears the status so the footer shows
+	h.mustSee("v send back " + sel.Title())
+	h.keys("j")
+	h.mustSee("v dock this instead")
+	h.keys("v") // swaps
+	h.keys("v") // sends it back
+	if w := "dock " + sel.Pane.PaneID + "|undock " + sel.Pane.PaneID + "|dock " + other + "|undock " + other; strings.Join(log, "|") != w {
+		t.Fatalf("got %q, want %q", strings.Join(log, "|"), w)
+	}
+	if h.m.Docked() != "" {
+		t.Fatal("nothing should be docked")
+	}
+
+	// An agent that exits while docked is forgotten, not sent back.
+	h.keys("v")
+	h.send(sessionsMsg{ss: []core.Session{a, b}[:1]})
+	if h.m.Docked() != "" && h.m.Docked() != "%a" {
+		t.Fatalf("docked = %q", h.m.Docked())
+	}
+	h.send(sessionsMsg{ss: nil})
+	if h.m.Docked() != "" {
+		t.Fatal("a closed pane should not stay docked")
+	}
+
+	h.m.opt.Dock = nil
+	h.keys("v")
+	h.mustSee("needs Switchboard running inside tmux")
+}

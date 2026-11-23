@@ -54,6 +54,7 @@ const (
 	aZen
 	aCopy
 	aConnect
+	aDock
 )
 
 var normalKeys = map[string]action{
@@ -66,7 +67,7 @@ var normalKeys = map[string]action{
 	"H": aPrevProject, "L": aNextProject,
 	"enter": aEnter, "m": aMove, "a": aAccept,
 	"n": aNewProject, "t": aNewThread, "e": aDescribe, "r": aRename, "d": aDelete,
-	"o": aLaunch, "i": aReply, "y": aCopy, "s": aConnect,
+	"o": aLaunch, "i": aReply, "y": aCopy, "s": aConnect, "v": aDock,
 	"/": aFilter, "esc": aEsc, "u": aRefresh, ":": aCommand,
 }
 
@@ -84,6 +85,7 @@ var prefixes = map[string][]keyHint{
 		{"space", "find a session", aFind},
 		{"o", "start Copilot here", aLaunch},
 		{"i", "type to the session", aReply},
+		{"v", "dock the session beside this panel (again sends it back)", aDock},
 		{"n", "new project", aNewProject},
 		{"t", "new thread", aNewThread},
 		{"e", "toggle projects panel", aToggleSide},
@@ -275,6 +277,8 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		return m, m.startReply()
 	case aSummarize:
 		return m, m.forceSummary()
+	case aDock:
+		m.toggleDock()
 	case aCopy:
 		m.copyAccess()
 	case aConnect:

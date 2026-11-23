@@ -3,6 +3,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -102,6 +103,11 @@ type Options struct {
 	Screen func(paneID string) (string, error)
 	Show   func(paneID string) error // switch to a pane; nil outside tmux
 
+	// Dock moves an agent's pane beside Switchboard and Undock sends it
+	// back. Nil outside tmux.
+	Dock   func(paneID string) error
+	Undock func(paneID string) error
+
 	// Prices fetches Azure list prices; nil hides costs. PricePath caches
 	// them.
 	Prices    cloud.Getter
@@ -184,6 +190,9 @@ type Model struct {
 	status    string
 	statusErr bool
 
+	docked      string // pane ID of the agent docked beside us
+	dockedTitle string
+
 	JumpTarget *tmux.Pane
 }
 
@@ -245,8 +254,19 @@ func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
 		}
 		return pane, src.Tmux.Pretype(pane, r.Pretype)
 	}
+	self := os.Getenv("TMUX_PANE")
 	if tmux.InsideTmux() {
 		opt.Show = src.Tmux.Show
+		if self != "" {
+			opt.Dock = func(id string) error { return src.Tmux.Dock(id, self, dockWidth) }
+			opt.Undock = src.Tmux.Undock
+			// Agents left docked by a Switchboard that crashed go home.
+			if ids, err := src.Tmux.Orphans(); err == nil {
+				for _, id := range ids {
+					_ = src.Tmux.Undock(id)
+				}
+			}
+		}
 	}
 	opt.Type = src.Tmux.Type
 	opt.Screen = src.Tmux.Screen
@@ -254,7 +274,13 @@ func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
 	if err != nil {
 		return nil, err
 	}
-	return final.(Model).JumpTarget, nil
+	fm := final.(Model)
+	if id := fm.Docked(); id != "" && opt.Undock != nil {
+		if err := opt.Undock(id); err != nil {
+			return nil, err
+		}
+	}
+	return fm.JumpTarget, nil
 }
 
 func (m Model) refresh() tea.Cmd {
@@ -509,6 +535,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.reload()
 		m.syncSelection()
+		m.dockGone()
 		if m.wantKey != "" {
 			for _, s := range m.visible() {
 				if s.Key == m.wantKey {
