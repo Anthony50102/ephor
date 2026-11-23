@@ -98,6 +98,10 @@ func (h *harness) keys(ks ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyCtrlH}
 		case "ctrl+l":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlL}
+		case "ctrl+d":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlD}
+		case "ctrl+u":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlU}
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}
@@ -339,6 +343,42 @@ func TestVimKeys(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatal(":q should quit")
+	}
+}
+
+func TestScrollMiddlePane(t *testing.T) {
+	var ss []core.Session
+	for i := 0; i < 15; i++ {
+		ss = append(ss, session(fmt.Sprint("s", i), fmt.Sprint("worker", i), agents.Working, time.Minute, i))
+	}
+	h := newHarness(t, ss, true)
+	h.send(tea.WindowSizeMsg{Width: 160, Height: 20})
+	h.mustSee("more · ctrl-d or wheel")
+	lines, _ := h.m.centerLines(h.m.layout())
+	end := len(lines) - h.m.layout().bodyH + 1
+
+	for i := 0; i < 20; i++ {
+		h.keys("ctrl+d")
+	}
+	if h.m.centerOff != end {
+		t.Fatalf("scrolling past the end should stop at %d, got %d", end, h.m.centerOff)
+	}
+	h.mustSee("more · ctrl-u")
+	if strings.Contains(h.screen(), "ctrl-d or wheel") {
+		t.Fatal("at the end there is nothing more below")
+	}
+	h.keys("ctrl+u")
+	if h.m.centerOff != end-10 {
+		t.Fatalf("one ctrl-u from the end should move half a page, got %d", h.m.centerOff)
+	}
+	h.send(tea.MouseMsg{X: 60, Y: 5, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if h.m.centerOff != end-13 {
+		t.Fatalf("the wheel over the middle pane should scroll it, got %d", h.m.centerOff)
+	}
+	side := h.m.sideIdx
+	h.send(tea.MouseMsg{X: 5, Y: 5, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if h.m.sideIdx != side+1 {
+		t.Fatal("the wheel over the sidebar should move its selection")
 	}
 }
 

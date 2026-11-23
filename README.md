@@ -52,7 +52,7 @@ of actions.
 | `h` / `l`, `ctrl-h` / `ctrl-l`, `tab` | projects column / sessions column |
 | `H` / `L` | previous / next project (like buffers) |
 | `]d` / `[d` | next / previous session that needs you (like diagnostics) |
-| `ctrl-d` / `ctrl-u` | scroll the brief |
+| `ctrl-d` / `ctrl-u`, `ctrl-e` / `ctrl-y`, mouse wheel | scroll the middle pane by half a page or a line. The wheel over the sidebar or session list moves the selection. Hold `shift` to select text with the mouse. |
 | `enter` | jump to the session's tmux window |
 | `m` / `a` | move session to a project / accept suggestion |
 | `n` `t` `e` `r` `d` | new project, new thread, describe, rename, delete |
@@ -186,8 +186,12 @@ It only reads. The rows then say what Azure says now:
 | `deallocated` | VM is off and not billed for compute |
 | `gone` | it no longer exists |
 
-The detail column shows the VM size or node pools (`2× D4as_v5 + auto nodes`)
-and the real resource group. The project brief groups rows by what they cost:
+The detail column shows the VM size or node pools. For clusters with node
+auto provisioning (managed Karpenter), the machines it made are found by
+their `karpenter.azure.com_cluster` tag and counted by size, for example
+`2× D4as_v5 + 2× NC40ads_H100_v5 spot`. Deallocated machines are not
+counted. If the reply was cut off, the pool shows as `auto nodes`.
+The detail column also shows the real resource group. The project brief groups rows by what they cost:
 
 1. **Running, costing money:** running, stopped but still billed, or a delete
    that did not stick. These are always listed, however long ago an agent

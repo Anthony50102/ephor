@@ -26,6 +26,8 @@ const (
 	aBottom
 	aHalfDown
 	aHalfUp
+	aLineDown
+	aLineUp
 	aPrevProject
 	aNextProject
 	aNextNeeds
@@ -53,7 +55,7 @@ var normalKeys = map[string]action{
 	"l": aFocusSessions, "right": aFocusSessions, "ctrl+l": aFocusSessions,
 	"j": aDown, "down": aDown, "k": aUp, "up": aUp,
 	"home": aTop, "G": aBottom, "end": aBottom,
-	"ctrl+d": aHalfDown, "ctrl+u": aHalfUp,
+	"ctrl+d": aHalfDown, "ctrl+u": aHalfUp, "ctrl+e": aLineDown, "ctrl+y": aLineUp,
 	"H": aPrevProject, "L": aNextProject,
 	"enter": aEnter, "m": aMove, "a": aAccept,
 	"n": aNewProject, "t": aNewThread, "e": aDescribe, "r": aRename, "d": aDelete,
@@ -166,9 +168,13 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 			m.selectSession(len(m.visible()) - 1)
 		}
 	case aHalfDown:
-		m.centerOff += m.height / 2
+		m.scrollCenter(m.height / 2)
 	case aHalfUp:
-		m.centerOff = max(0, m.centerOff-m.height/2)
+		m.scrollCenter(-m.height / 2)
+	case aLineDown:
+		m.scrollCenter(1)
+	case aLineUp:
+		m.scrollCenter(-1)
 	case aPrevProject:
 		m.stepProject(-1)
 	case aNextProject:

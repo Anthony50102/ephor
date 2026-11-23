@@ -192,7 +192,7 @@ func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
 			return src.Tmux.SwitchClient(p)
 		}
 	}
-	final, err := tea.NewProgram(New(opt), tea.WithAltScreen()).Run()
+	final, err := tea.NewProgram(New(opt), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	if err != nil {
 		return nil, err
 	}
@@ -468,6 +468,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.refresh())
 		}
 		return m, tea.Batch(cmds...)
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 	case tea.KeyMsg:
 		switch m.mode {
 		case modeInput:
@@ -908,5 +910,32 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.rebuildSide()
 	m.setSide(m.sideIdx)
 	m.setStatus("Deleted")
+	return m, nil
+}
+
+// updateMouse scrolls with the wheel: the sidebar and session list move
+// their selection, the middle pane scrolls.
+func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress || m.mode != modeNormal {
+		return m, nil
+	}
+	step := 0
+	switch msg.Button {
+	case tea.MouseButtonWheelDown:
+		step = 1
+	case tea.MouseButtonWheelUp:
+		step = -1
+	default:
+		return m, nil
+	}
+	l := m.layout()
+	switch {
+	case msg.X < l.sideW:
+		m.setSide(m.sideIdx + step)
+	case l.wide && msg.X > l.sideW+l.centerW:
+		m.selectSession(m.sessIdx + step)
+	default:
+		m.scrollCenter(3 * step)
+	}
 	return m, nil
 }

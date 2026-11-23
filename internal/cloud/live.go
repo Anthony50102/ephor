@@ -59,6 +59,8 @@ var armTypes = map[string]string{
 // nothing.
 const kubeType = "microsoft.containerservice/managedclusters"
 
+const napTag = "karpenter.azure.com_cluster"
+
 // Checkable reports whether a live check can say anything about r.
 func Checkable(r Resource) bool {
 	return armType(r) != "" && safeName.MatchString(r.Name)
@@ -82,7 +84,7 @@ const (
 // Query builds one Resource Graph query covering every checkable resource.
 func Query(rs []Resource) string {
 	seen := map[string]bool{}
-	var res, groups, types []string
+	var res, groups, types, clusters []string
 	tseen := map[string]bool{}
 	for _, r := range rs {
 		t := armType(r)
@@ -100,6 +102,9 @@ func Query(rs []Resource) string {
 			continue
 		}
 		res = append(res, "'"+n+"'")
+		if t == kubeType {
+			clusters = append(clusters, "'"+n+"'")
+		}
 		if !tseen[t] {
 			tseen[t] = true
 			types = append(types, "'"+t+"'")
@@ -108,6 +113,7 @@ func Query(rs []Resource) string {
 	sort.Strings(res)
 	sort.Strings(types)
 	sort.Strings(groups)
+	sort.Strings(clusters)
 	const cols = "name, type, resourceGroup"
 	var parts []string
 	if len(res) > 0 {
@@ -120,13 +126,23 @@ func Query(rs []Resource) string {
 	if len(groups) > 0 {
 		parts = append(parts, "ResourceContainers | where type =~ 'microsoft.resources/subscriptions/resourcegroups' and name in~ ("+strings.Join(groups, ",")+") | project "+cols)
 	}
-	switch len(parts) {
-	case 0:
-		return ""
-	case 1:
-		return parts[0]
+	if len(clusters) > 0 {
+		// Node auto provisioning (managed Karpenter) makes plain VMs that
+		// the cluster's pool list does not count. They carry its name in a tag.
+		parts = append(parts, "Resources | where type =~ 'microsoft.compute/virtualmachines'"+
+			" and tostring(tags['"+napTag+"']) in~ ("+strings.Join(clusters, ",")+")"+
+			" | project "+cols+", vmSize=tostring(properties.hardwareProfile.vmSize),"+
+			" power=tostring(properties.extended.instanceView.powerState.code),"+
+			" aksCluster=tostring(tags['"+napTag+"']), priority=tostring(properties.priority)")
 	}
-	return parts[0] + " | union (" + parts[1] + ")"
+	if len(parts) == 0 {
+		return ""
+	}
+	q := parts[0]
+	if len(parts) > 1 {
+		q += " | union (" + strings.Join(parts[1:], "), (") + ")"
+	}
+	return q
 }
 
 type graphRow struct {
@@ -137,7 +153,10 @@ type graphRow struct {
 	Cap    *int   `json:"cap"`
 	VMSize string `json:"vmSize"`
 	Power  string `json:"power"`
-	Pools  []struct {
+	// For machines made by node auto provisioning: their cluster.
+	Cluster  string `json:"aksCluster"`
+	Priority string `json:"priority"`
+	Pools    []struct {
 		Name   string `json:"name"`
 		Count  *int   `json:"count"`
 		VMSize string `json:"vmSize"`
@@ -159,7 +178,12 @@ func Match(rs []Resource, reply []byte) (map[string]Live, error) {
 		return nil, fmt.Errorf("unreadable Resource Graph reply: %w", err)
 	}
 	found := map[string][]graphRow{}
+	nodes := map[string][]graphRow{} // cluster name to its auto-provisioned machines
 	for _, g := range out.Data {
+		if g.Cluster != "" {
+			nodes[strings.ToLower(g.Cluster)] = append(nodes[strings.ToLower(g.Cluster)], g)
+			continue
+		}
 		k := strings.ToLower(g.Type) + "/" + strings.ToLower(g.Name)
 		found[k] = append(found[k], g)
 	}
@@ -177,7 +201,8 @@ func Match(rs []Resource, reply []byte) (map[string]Live, error) {
 			}
 			continue
 		}
-		live[r.ID()] = describe(pick(cands, r.Scope))
+		g := pick(cands, r.Scope)
+		live[r.ID()] = describe(g, nodes[strings.ToLower(g.Name)], complete)
 	}
 	return live, nil
 }
@@ -197,7 +222,7 @@ func pick(cands []graphRow, scope string) graphRow {
 	return cands[0]
 }
 
-func describe(g graphRow) Live {
+func describe(g graphRow, nodes []graphRow, complete bool) Live {
 	l := Live{Found: true, Group: g.Group}
 	switch p := strings.ToLower(strings.TrimPrefix(g.Power, "PowerState/")); p {
 	case "":
@@ -216,6 +241,8 @@ func describe(g graphRow) Live {
 		var ps []string
 		for _, p := range g.Pools {
 			switch {
+			case p.Mode == "Machines" && complete:
+				ps = append(ps, machines(nodes)...)
 			case p.Mode == "Machines" || p.Count == nil:
 				ps = append(ps, "auto nodes")
 			case *p.Count > 0 && !strings.EqualFold(p.Power.Code, "stopped"):
@@ -270,4 +297,26 @@ func Check(ctx context.Context, run Checker, rs []Resource) (map[string]Live, er
 		return nil, err
 	}
 	return Match(rs, reply)
+}
+
+// machines counts running auto-provisioned nodes by size, for example
+// "2× NC40ads_H100_v5 spot". Stopped ones are not billed for compute.
+func machines(nodes []graphRow) []string {
+	n := map[string]int{}
+	for _, g := range nodes {
+		if !strings.HasSuffix(strings.ToLower(g.Power), "running") {
+			continue
+		}
+		k := shortSize(g.VMSize)
+		if strings.EqualFold(g.Priority, "spot") {
+			k += " spot"
+		}
+		n[k]++
+	}
+	var out []string
+	for k, c := range n {
+		out = append(out, fmt.Sprintf("%d× %s", c, k))
+	}
+	sort.Strings(out)
+	return out
 }

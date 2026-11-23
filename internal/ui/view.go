@@ -20,34 +20,59 @@ const (
 	wideEnough = 124
 )
 
+type layout struct {
+	bodyH, sideW, centerW int
+	wide                  bool
+}
+
+func (m Model) layout() layout {
+	l := layout{bodyH: m.height - 2, wide: m.width >= wideEnough, sideW: sideWide}
+	if m.width < 100 {
+		l.sideW = sideNarrow
+	}
+	l.centerW = m.width - l.sideW - 1
+	if l.wide {
+		l.centerW -= rightW + 1
+	}
+	return l
+}
+
+// centerLines is the whole middle pane before scrolling, and the line of
+// the selected session when the session list is inside it.
+func (m Model) centerLines(l layout) ([]string, int) {
+	switch m.mode {
+	case modeOrganize:
+		return m.viewOrganize(l.centerW - 4), -1
+	case modeHelp:
+		return m.viewHelp(l.centerW - 4), -1
+	}
+	return m.viewCenter(l.centerW-4, !l.wide)
+}
+
+// clampOff keeps a scroll offset between the top and the point where the
+// last line is just on screen.
+func clampOff(off, total, h int) int {
+	return max(0, min(off, total-h+1))
+}
+
+// scrollCenter moves the middle pane by n lines, stopping at either end.
+func (m *Model) scrollCenter(n int) {
+	l := m.layout()
+	lines, _ := m.centerLines(l)
+	m.centerOff = clampOff(clampOff(m.centerOff, len(lines), l.bodyH)+n, len(lines), l.bodyH)
+}
+
 // View renders the whole screen.
 func (m Model) View() string {
 	w, h := m.width, m.height
 	if w < 60 || h < 12 {
 		return "Switchboard needs at least 60×12. Make the window bigger."
 	}
-	bodyH := h - 2
-	wide := w >= wideEnough
-	sideW := sideWide
-	if w < 100 {
-		sideW = sideNarrow
-	}
-	centerW := w - sideW - 1
-	if wide {
-		centerW -= rightW + 1
-	}
+	lay := m.layout()
+	bodyH, wide, sideW, centerW := lay.bodyH, lay.wide, lay.sideW, lay.centerW
 
 	side := box(m.viewSide(sideW, bodyH), sideW, bodyH)
-	var center []string
-	selLine := -1
-	switch m.mode {
-	case modeOrganize:
-		center = m.viewOrganize(centerW - 4)
-	case modeHelp:
-		center = m.viewHelp(centerW - 4)
-	default:
-		center, selLine = m.viewCenter(centerW-4, !wide)
-	}
+	center, selLine := m.centerLines(lay)
 	if m.mode == modeNormal || m.mode == modeInput || m.mode == modeConfirm {
 		off := m.centerOff
 		// In the narrow layout the session list is inside the brief, so
@@ -55,14 +80,15 @@ func (m Model) View() string {
 		if selLine >= 0 && m.focus == focusSessions && (selLine < off || selLine >= off+bodyH-2) {
 			off = selLine - bodyH/3
 		}
-		if off < 0 {
-			off = 0
-		}
-		if max := len(center) - bodyH + 1; off > max {
-			off = max
-		}
+		off = clampOff(off, len(center), bodyH)
+		total := len(center)
+		center = center[off:]
+		// Say when there is more, on lines that are blank or about to scroll.
 		if off > 0 {
-			center = center[off:]
+			center[0] = spread("", sSubtle.Render(fmt.Sprintf("↑ %d more · ctrl-u", off)), centerW-4)
+		}
+		if below := total - off - bodyH; below > 0 {
+			center[bodyH-1] = spread("", sBlue.Render(fmt.Sprintf("↓ %d more · ctrl-d or wheel", below+1)), centerW-4)
 		}
 	}
 	center = box(indent(center, 2), centerW, bodyH)
@@ -912,7 +938,7 @@ func (m Model) viewHelp(w int) []string {
 		title string
 		keys  [][2]string
 	}{
-		{"MOVE", [][2]string{{"j / k", "down / up in the focused list"}, {"h l  ctrl-h ctrl-l", "projects / sessions column (also tab)"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"gg / G", "top / bottom"}, {"ctrl-d / ctrl-u", "scroll the brief"}}},
+		{"MOVE", [][2]string{{"j / k", "down / up in the focused list"}, {"h l  ctrl-h ctrl-l", "projects / sessions column (also tab)"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"gg / G", "top / bottom"}, {"ctrl-d / ctrl-u", "scroll the middle pane (ctrl-e / ctrl-y a line, or the wheel)"}}},
 		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
 		{"PROJECTS", [][2]string{{"n", "new project"}, {"t", "new thread in this project"}, {"e", "describe what the project is for"}, {"r", "rename project or thread"}, {"d", "delete project or thread"}}},
 		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":help", "this screen"}}},

@@ -165,7 +165,8 @@ func TestLive(t *testing.T) {
 		{Kind: "SSH host", Name: "10.0.0.1"},
 	}
 	q := Query(rs)
-	if strings.Contains(q, "union (Resources") || !strings.Contains(q, "'gpu'") || !strings.Contains(q, "ResourceContainers") {
+	if strings.Contains(q, "union (Resources") || !strings.Contains(q, "'gpu'") || !strings.Contains(q, "ResourceContainers") ||
+		!strings.Contains(q, "tostring(tags['karpenter.azure.com_cluster']) in~ ('aks1','kubeconfig-ring1')") {
 		t.Fatalf("query = %s", q)
 	}
 	reply := `{"data":[
@@ -176,7 +177,10 @@ func TestLive(t *testing.T) {
 		{"name":"aks1","type":"microsoft.containerservice/managedclusters","resourceGroup":"rg-k","power":"Running",
 		 "pools":[{"name":"sys","count":2,"vmSize":"Standard_D4as_v5","mode":"System","powerState":{"code":"Running"}},
 		          {"name":"gpu","count":0,"vmSize":"Standard_NC24","mode":"User","powerState":{"code":"Running"}},
-		          {"name":"nap","mode":"Machines","powerState":{"code":"Running"}}]}]}`
+		          {"name":"nap","mode":"Machines","powerState":{"code":"Running"}}]},
+		{"name":"aks-nap-a","type":"microsoft.compute/virtualmachines","vmSize":"Standard_NC40ads_H100_v5","power":"PowerState/running","aksCluster":"AKS1","priority":"Spot"},
+		{"name":"aks-nap-b","type":"microsoft.compute/virtualmachines","vmSize":"Standard_NC40ads_H100_v5","power":"PowerState/running","aksCluster":"aks1","priority":"Spot"},
+		{"name":"aks-nap-c","type":"microsoft.compute/virtualmachines","vmSize":"Standard_D8s_v5","power":"PowerState/deallocated","aksCluster":"aks1"}]}`
 	live, err := Match(rs, []byte(reply))
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +198,7 @@ func TestLive(t *testing.T) {
 		"gone||",
 		"exists||rg-a",
 		"unchecked", // a kubeconfig name that is not an AKS name proves nothing
-		"running|2× D4as_v5 + auto nodes|rg-k",
+		"running|2× D4as_v5 + 2× NC40ads_H100_v5 spot|rg-k", // auto-provisioned machines are counted; stopped ones are not
 		"unchecked",
 		"unchecked",
 	}
