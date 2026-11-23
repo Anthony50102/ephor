@@ -513,3 +513,85 @@ func TestCloudSection(t *testing.T) {
 	h.send(h.cmd())
 	h.mustSee("Azure check failed", "running · created 1h")
 }
+
+func TestLaunchCopilotIntoProject(t *testing.T) {
+	dir := t.TempDir()
+	a := session("a", "alpha", agents.Working, time.Minute, 1)
+	a.Info.Cwd = dir
+	h := newHarness(t, []core.Session{a}, true)
+	p := h.seedProject("Nabu Work", "a", now)
+	var got []LaunchReq
+	h.m.opt.Launch = func(r LaunchReq) (string, error) { got = append(got, r); return "%9", nil }
+	h.m.setSide(2)
+
+	h.keys("o")
+	if expandHome(h.m.input.Value()) != dir {
+		t.Fatalf("folder default = %q, want %q", h.m.input.Value(), dir)
+	}
+	h.keys("enter")
+	h.mustSee("First task")
+	h.typeText("fix Bob's bug")
+	h.keys("enter")
+
+	if len(got) != 1 {
+		t.Fatalf("launches = %d", len(got))
+	}
+	r := got[0]
+	if r.Dir != dir || r.Window != "nabu-work" || r.Session != "$0" {
+		t.Fatalf("request = %+v", r)
+	}
+	id, rest, _ := strings.Cut(strings.TrimPrefix(r.Command, "copilot --session-id "), " ")
+	if len(id) != 36 || rest != `--name 'Nabu Work' -i 'fix Bob'\''s bug'` {
+		t.Fatalf("command = %q", r.Command)
+	}
+	if as := h.m.st.Assign["copilot:"+id]; as.Project != p.ID {
+		t.Fatalf("new session not filed under the project: %+v", as)
+	}
+
+	// When it appears, it is already in the project and gets selected.
+	b := session("copilot:"+id, "Nabu Work", agents.Working, 0, 2)
+	h.send(sessionsMsg{ss: []core.Session{a, b}})
+	if s, ok := h.m.selected(); !ok || s.Key != b.Key {
+		t.Fatalf("selected %q, want the new session", s.Key)
+	}
+}
+
+func TestLaunchRejectsMissingFolder(t *testing.T) {
+	h := newHarness(t, nil, true)
+	h.m.opt.Launch = func(LaunchReq) (string, error) { t.Fatal("launched"); return "", nil }
+	h.keys("o")
+	h.m.input.SetValue(filepath.Join(t.TempDir(), "nope"))
+	h.keys("enter")
+	h.mustSee("is not a folder")
+}
+
+func TestTypeToSession(t *testing.T) {
+	a := session("a", "alpha", agents.NeedsYou, time.Minute, 1)
+	h := newHarness(t, []core.Session{a}, true)
+	var typed [][2]string
+	h.m.opt.Type = func(pane, text string) error { typed = append(typed, [2]string{pane, text}); return nil }
+	h.m.opt.Screen = func(pane string) (string, error) {
+		return "Run the migration?" + strings.Repeat("\n", 80) + "❯ 1. Yes\n  2. No\n\n\n", nil
+	}
+	h.m.focus = focusSessions
+
+	cmd := h.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	if cmd == nil {
+		t.Fatal("no screen capture")
+	}
+	h.send(cmd())
+	h.mustSee("TYPING TO", "Run the migration?", "❯ 1. Yes", "Type to alpha")
+
+	h.typeText("1")
+	h.keys("enter")
+	h.keys("enter")
+	want := [][2]string{{"%a", "1"}, {"%a", ""}}
+	if fmt.Sprint(typed) != fmt.Sprint(want) {
+		t.Fatalf("typed %v, want %v", typed, want)
+	}
+	h.mustSee("Pressed Enter in alpha")
+	h.keys("esc")
+	if h.m.mode != modeNormal || strings.Contains(h.screen(), "TYPING TO") {
+		t.Fatal("esc did not leave typing mode")
+	}
+}

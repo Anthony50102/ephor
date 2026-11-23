@@ -58,6 +58,9 @@ const (
 	inRename
 	inFilter
 	inCommand
+	inLaunchDir
+	inLaunchTask
+	inReply
 )
 
 type orgOpt struct {
@@ -89,6 +92,13 @@ type Options struct {
 	// CheckLive asks Azure whether the resources still exist; nil skips it.
 	CheckLive cloud.Checker
 	LiveEvery time.Duration
+
+	// Launch opens a tmux window and types a command into it, returning the
+	// new pane ID. Type sends text and Enter to a pane. Screen reads a pane.
+	// Nil turns the matching feature off.
+	Launch func(LaunchReq) (string, error)
+	Type   func(paneID, text string) error
+	Screen func(paneID string) (string, error)
 }
 
 // Model is the Bubble Tea model.
@@ -137,6 +147,13 @@ type Model struct {
 	liveAt    time.Time // when the last check started
 	liveKeys0 string    // the resources it asked about
 	liveErr   string
+
+	wantKey    string // select this session once it appears
+	replyPane  string
+	replyTitle string
+	screen     string
+	screenErr  error
+	screenGen  int
 
 	viewedPID string
 	newSince  map[string]time.Time
@@ -192,6 +209,15 @@ func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
 			return src.Tmux.SwitchClient(p)
 		}
 	}
+	opt.Launch = func(r LaunchReq) (string, error) {
+		pane, err := src.Tmux.NewWindow(r.Session, r.Window, r.Dir)
+		if err != nil {
+			return "", err
+		}
+		return pane, src.Tmux.Type(pane, r.Command)
+	}
+	opt.Type = src.Tmux.Type
+	opt.Screen = src.Tmux.Screen
 	final, err := tea.NewProgram(New(opt), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	if err != nil {
 		return nil, err
@@ -450,7 +476,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.reload()
 		m.syncSelection()
+		if m.wantKey != "" {
+			for _, s := range m.visible() {
+				if s.Key == m.wantKey {
+					m.syncSelectionTo(s.Key)
+					m.focus = focusSessions
+					m.wantKey = ""
+					break
+				}
+			}
+		}
 		return m, tea.Batch(m.maybeSummarize(), m.scanCloud())
+	case screenMsg:
+		m.gotScreen(msg)
+		if !m.replying() || msg.gen != m.screenGen {
+			return m, nil
+		}
+		gen := m.screenGen
+		return m, tea.Tick(screenEvery, func(time.Time) tea.Msg { return screenTick{gen} })
+	case screenTick:
+		if !m.replying() || msg.gen != m.screenGen {
+			return m, nil
+		}
+		return m, m.captureScreen()
 	case summaryMsg:
 		m.gotSummary(msg)
 		return m, m.maybeSummarize()
@@ -727,6 +775,15 @@ func (m Model) inputPrompt() string {
 		return "Filter sessions"
 	case inCommand:
 		return ":"
+	case inLaunchDir:
+		if m.inputPID == "" {
+			return "Start Copilot in folder"
+		}
+		return "Start Copilot for " + m.placeName(m.inputPID, m.inputTID) + " in folder"
+	case inLaunchTask:
+		return "First task (optional, enter to skip)"
+	case inReply:
+		return "Type to " + m.replyTitle
 	}
 	return ""
 }
@@ -742,6 +799,11 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Blur()
 		return m, nil
 	case "enter":
+		if m.inputKind == inReply {
+			m.sendReply(strings.TrimSpace(m.input.Value()))
+			m.input.SetValue("")
+			return m, nil
+		}
 		m.mode = modeNormal
 		m.input.Blur()
 		if m.inputKind == inCommand {
@@ -768,6 +830,11 @@ func (m *Model) commitInput(v string) {
 		return
 	case inNewProject:
 		m.commitNewProject(v, m.inputKey)
+	case inLaunchDir:
+		m.commitLaunchDir(v)
+		return
+	case inLaunchTask:
+		m.launch(m.inputKey, v)
 	case inNewThread:
 		var tid string
 		pid := m.inputPID

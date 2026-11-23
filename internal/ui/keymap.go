@@ -47,6 +47,8 @@ const (
 	aCommand
 	aSummarize
 	aCheckCloud
+	aLaunch
+	aReply
 )
 
 var normalKeys = map[string]action{
@@ -59,6 +61,7 @@ var normalKeys = map[string]action{
 	"H": aPrevProject, "L": aNextProject,
 	"enter": aEnter, "m": aMove, "a": aAccept,
 	"n": aNewProject, "t": aNewThread, "e": aDescribe, "r": aRename, "d": aDelete,
+	"o": aLaunch, "i": aReply,
 	"/": aFilter, "esc": aEsc, "u": aRefresh, ":": aCommand,
 }
 
@@ -74,6 +77,8 @@ var prefixes = map[string][]keyHint{
 	"[": {{"d", "previous session that needs you", aPrevNeeds}, {"p", "previous project", aPrevProject}},
 	" ": {
 		{"space", "find a session", aFind},
+		{"o", "start Copilot here", aLaunch},
+		{"i", "type to the session", aReply},
 		{"n", "new project", aNewProject},
 		{"t", "new thread", aNewThread},
 		{"e", "describe project", aDescribe},
@@ -233,6 +238,10 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		}
 	case aCommand:
 		m.startInput(inCommand, "", "", "", "")
+	case aLaunch:
+		m.startLaunch()
+	case aReply:
+		return m, m.startReply()
 	case aSummarize:
 		return m, m.forceSummary()
 	case aCheckCloud:

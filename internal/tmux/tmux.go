@@ -120,3 +120,40 @@ func ExecAttach(p Pane) error {
 	}
 	return syscall.Exec(bin, []string{"tmux", "attach-session", "-t", p.SessionID}, os.Environ())
 }
+
+// Screen returns the visible text of a pane, without colors.
+func (c Client) Screen(paneID string) (string, error) {
+	return c.Run("capture-pane", "-p", "-t", paneID)
+}
+
+// NewWindow opens a detached window in session (the current or first session
+// when empty) and returns its pane ID. With no tmux server running it starts
+// a detached session named "switchboard".
+func (c Client) NewWindow(session, name, dir string) (string, error) {
+	args := []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-n", name, "-c", dir}
+	if session == "" && !InsideTmux() {
+		out, err := c.Run("list-sessions", "-F", "#{session_id}")
+		if err != nil || strings.TrimSpace(out) == "" {
+			out, err := c.Run("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", "switchboard", "-n", name, "-c", dir)
+			return strings.TrimSpace(out), err
+		}
+		session, _, _ = strings.Cut(strings.TrimSpace(out), "\n")
+	}
+	if session != "" {
+		args = append(args, "-t", session+":")
+	}
+	out, err := c.Run(args...)
+	return strings.TrimSpace(out), err
+}
+
+// Type sends text to a pane as if typed, then presses Enter. Empty text
+// presses Enter only.
+func (c Client) Type(paneID, text string) error {
+	if text != "" {
+		if _, err := c.Run("send-keys", "-t", paneID, "-l", "--", text); err != nil {
+			return err
+		}
+	}
+	_, err := c.Run("send-keys", "-t", paneID, "Enter")
+	return err
+}

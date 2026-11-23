@@ -43,6 +43,28 @@ with `e`, then select a session and press `m` to move it into the project (or
 `a` to accept a suggestion). Inside tmux, `enter` switches your client to the
 session's window; outside tmux it attaches.
 
+### Starting and steering agents
+
+Press `o` in a project or thread to start Copilot there. Switchboard asks for
+the folder (it suggests where that project's latest session runs) and an
+optional first task. It then opens a new tmux window next to the project's
+other sessions and types this into it:
+
+```sh
+copilot --session-id <new uuid> --name '<project or thread>' -i '<task>'
+```
+
+Switchboard chooses the session ID, so the session is filed under the project
+before Copilot starts. It appears and is selected within a few seconds. The
+command is typed into a shell rather than run directly, so your shell setup
+applies and the window keeps a shell when Copilot exits. Agents still live in
+tmux, so they keep running when Switchboard closes.
+
+Press `i` on a session to type to it without leaving. The middle pane shows a
+live view of its terminal. `enter` sends your text and presses Enter, so `1`
+then `enter` answers a numbered approval prompt. `enter` on an empty line only
+presses Enter. `esc` returns to the panel.
+
 Keys follow LazyVim and the Snacks explorer. Press `space` for a which-key menu
 of actions.
 
@@ -54,6 +76,7 @@ of actions.
 | `]d` / `[d` | next / previous session that needs you (like diagnostics) |
 | `ctrl-d` / `ctrl-u`, `ctrl-e` / `ctrl-y`, mouse wheel | scroll the middle pane by half a page or a line. The wheel over the sidebar or session list moves the selection. Hold `shift` to select text with the mouse. |
 | `enter` | jump to the session's tmux window |
+| `i` / `o` | type to the session / start Copilot in this project or thread |
 | `m` / `a` | move session to a project / accept suggestion |
 | `n` `t` `e` `r` `d` | new project, new thread, describe, rename, delete |
 | `/` | filter sessions (`esc` clears); `space space` searches all |
@@ -222,4 +245,4 @@ summarizer is told what Azure said.
 - Cost figures. Cost Management lags about a day, so sizes and power state
   stand in for now.
 - Checking Kubernetes jobs with `kubectl`.
-- Starting new agent sessions from the panel.
+- Starting Claude Code from the panel (`i` already works with it).

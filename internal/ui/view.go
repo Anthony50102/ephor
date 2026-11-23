@@ -46,6 +46,9 @@ func (m Model) centerLines(l layout) ([]string, int) {
 	case modeHelp:
 		return m.viewHelp(l.centerW - 4), -1
 	}
+	if m.replying() {
+		return m.viewScreen(l.centerW-4, l.bodyH), -1
+	}
 	return m.viewCenter(l.centerW-4, !l.wide)
 }
 
@@ -939,7 +942,7 @@ func (m Model) viewHelp(w int) []string {
 		keys  [][2]string
 	}{
 		{"MOVE", [][2]string{{"j / k", "down / up in the focused list"}, {"h l  ctrl-h ctrl-l", "projects / sessions column (also tab)"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"gg / G", "top / bottom"}, {"ctrl-d / ctrl-u", "scroll the middle pane (ctrl-e / ctrl-y a line, or the wheel)"}}},
-		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
+		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"i", "type to the session without leaving"}, {"o", "start Copilot in this project or thread"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
 		{"PROJECTS", [][2]string{{"n", "new project"}, {"t", "new thread in this project"}, {"e", "describe what the project is for"}, {"r", "rename project or thread"}, {"d", "delete project or thread"}}},
 		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":help", "this screen"}}},
 		{"COLORS", [][2]string{{sAmber.Render("●"), "needs you: a question or approval is waiting"}, {sGreen.Render("●"), "working"}, {sCyan.Render("✓"), "finished and ready for your next instruction"}, {sSubtle.Render("○"), "quiet: nothing new in a day"}, {sNewTag.Render("new"), "finished since you last opened the project"}}},
