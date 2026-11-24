@@ -482,9 +482,6 @@ func (m Model) buildSide(w, h int) ([]string, []int) {
 			} else if r.Total > 0 {
 				right = sSubtle.Render(fmt.Sprint(r.Total))
 			}
-			if i > 0 && m.side[i-1].kind == sideThread {
-				push("", -1) // close the previous project's thread group
-			}
 			add(i, dot(r.State), sBold.Render(p.Name), right)
 		case sideThread:
 			p := m.st.Project(it.pid)
@@ -883,7 +880,7 @@ func (m Model) viewProject(w int, sc sideItem) page {
 	lines = append(lines, rule(w))
 	pg := page{lines: lines}
 
-	if c := m.happeningCard(w, p.ID, ss, r); c != nil {
+	if c := m.happeningCard(w, p.ID, sc.tid != "", ss, r); c != nil {
 		pg.add("")
 		pg.addCard(cardRef{id: "happening"}, c)
 	}
@@ -922,17 +919,23 @@ func (m Model) viewProject(w int, sc sideItem) page {
 }
 
 // happeningCard is the raised card at the top of a brief: a headline, the
-// story, and what finished since the last look.
-func (m Model) happeningCard(w int, pid string, ss []core.Session, r core.Rollup) []string {
+// story, and what finished since the last look. For a single thread view, it
+// focuses on that thread's sessions rather than pasting the whole project's
+// multi-thread summary.
+func (m Model) happeningCard(w int, pid string, threadOnly bool, ss []core.Session, r core.Rollup) []string {
 	now := m.opt.Now()
 	in := w - 4
 	pw := proseWidth(in)
 	sum, hasSum := m.summaryFor(pid)
-	head := spread(sBlue.Bold(true).Render("HAPPENING NOW"), m.summaryMeta(pid), in)
+	meta := m.summaryMeta(pid)
+	if threadOnly {
+		meta = ""
+	}
+	head := spread(sBlue.Bold(true).Render("HAPPENING NOW"), meta, in)
 	body := []string{head}
 	open := m.open("happening")
 	switch {
-	case hasSum:
+	case hasSum && !threadOnly:
 		hl, rest := sum.Headline, sum.Now
 		if hl == "" {
 			hl = agents.FirstSentence(sum.Now, 200)
@@ -957,19 +960,37 @@ func (m Model) happeningCard(w int, pid string, ss []core.Session, r core.Rollup
 			}
 		}
 	default:
-		var moving []string
-		for _, s := range ss {
-			if s.State(now) != agents.Working {
+		var lines []string
+		sorted := append([]core.Session{}, ss...)
+		core.SortSessions(sorted, now)
+		for _, s := range sorted {
+			st := s.State(now)
+			if !threadOnly && st != agents.Working {
 				continue
 			}
-			moving = append(moving, spread(sGreen.Render("● ")+sBold.Render(s.Title()), sSubtle.Render(core.Ago(s.Info.UpdatedAt, now)), in))
-			if d := cleanProse(m.doing(s)); d != "" {
-				moving = append(moving, clamp(indent(wrap(sText.Render(d), proseWidth(in-2)), 2), 2, in)...)
+			if threadOnly && (st == agents.Quiet || st == agents.Ended || st == agents.Unknown) {
+				continue
+			}
+			right := sSubtle.Render(core.Ago(s.Info.UpdatedAt, now))
+			if st == agents.Working && s.Info.Scheduled != "" {
+				right = sSubtle.Render(s.Info.Scheduled+" · ") + right
+			}
+			lines = append(lines, spread(dot(st)+" "+sBold.Render(s.Title()), right, in))
+			d := cleanProse(m.status1(s))
+			if d == "" {
+				d = cleanProse(m.doing(s))
+			}
+			if d != "" {
+				keep := 2
+				if open {
+					keep = 6
+				}
+				lines = append(lines, clamp(indent(wrap(sText.Render(d), proseWidth(in-2)), 2), keep, in)...)
 			}
 		}
 		switch {
-		case moving != nil:
-			body = append(body, moving...)
+		case lines != nil:
+			body = append(body, lines...)
 		case r.Total == 0:
 			body = append(body, sSubtle.Render("No live sessions. Move one into this project with ")+sKey.Render("m")+sSubtle.Render("."))
 		case r.NeedsYou > 0 && len(core.RecentResults(ss, 1)) == 0:

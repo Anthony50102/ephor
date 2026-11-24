@@ -108,6 +108,18 @@ func TestPromptLabelsSessions(t *testing.T) {
 			t.Fatalf("prompt is missing %q:\n%s", want, p)
 		}
 	}
+
+	// Multi-session prompts include Checkpoint and cap verbose asks/results symmetrically.
+	in.Sessions[0].Checkpoint = "Recent work: wave 8 authoring."
+	in.Sessions[1].Asks = []string{"ask1", "ask2", "ask3", "ask4"}
+	in.Sessions[1].Results = []string{"res1", "res2"}
+	p2 := Prompt(in, t0)
+	if !strings.Contains(p2, "latest checkpoint: Recent work: wave 8 authoring.") {
+		t.Fatalf("missing checkpoint in prompt:\n%s", p2)
+	}
+	if strings.Contains(p2, "ask3") || strings.Contains(p2, "res2") {
+		t.Fatalf("multi-session prompt should cap asks at 2 and results at 1:\n%s", p2)
+	}
 }
 
 func TestShellTimeoutKillsGrandchildren(t *testing.T) {

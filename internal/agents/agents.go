@@ -47,25 +47,26 @@ type Result struct {
 
 // Info is what Switchboard knows about one agent session.
 type Info struct {
-	Kind      string
-	ID        string
-	Name      string
-	Cwd       string
-	Repo      string
-	Branch    string
-	State     State
-	Reason    string // why it needs you, for example the pending question
-	Scheduled string // active scheduled check-in cadence, e.g. "every 20m"
-	Ask       string // latest instruction typed by the user
-	AskAt     time.Time
-	Results   []Result // newest first
-	Asks      []Result // recent instructions from the user, newest first
-	FirstAsk  string   // opening user prompt when the session has no milestone arc
-	Arc       []string // chronological milestone titles across the session's life
-	Said      string   // the agent's latest reply, for summaries
-	SaidAt    time.Time
-	UpdatedAt time.Time
-	Log       string // the session's event log or transcript
+	Kind       string
+	ID         string
+	Name       string
+	Cwd        string
+	Repo       string
+	Branch     string
+	State      State
+	Reason     string // why it needs you, for example the pending question
+	Scheduled  string // active scheduled check-in cadence, e.g. "every 20m"
+	Ask        string // latest instruction typed by the user
+	AskAt      time.Time
+	Results    []Result // newest first
+	Asks       []Result // recent instructions from the user, newest first
+	FirstAsk   string   // opening user prompt when the session has no milestone arc
+	Arc        []string // chronological milestone titles across the session's life
+	Checkpoint string   // latest checkpoint summary when recent asks/results scrolled away
+	Said       string   // the agent's latest reply, for summaries
+	SaidAt     time.Time
+	UpdatedAt  time.Time
+	Log        string // the session's event log or transcript
 }
 
 const (
@@ -228,16 +229,23 @@ func FirstSentence(s string, n int) string {
 	return oneLine(strings.ReplaceAll(s, "**", ""), n)
 }
 
-// noteAsk records a user instruction while scanning newest first.
+// noteAsk records a user instruction while scanning newest first, skipping
+// duplicate prompts (such as repeated scheduled ticks) so earlier asks stay visible.
 func (info *Info) noteAsk(text string, at time.Time) {
 	text = strings.TrimSpace(text)
 	if text == "" || len(info.Asks) >= maxAsks {
 		return
 	}
-	if len(info.Asks) == 0 {
-		info.Ask, info.AskAt = oneLine(text, 400), at
+	line := oneLine(text, 400)
+	for _, prev := range info.Asks {
+		if prev.Text == line {
+			return
+		}
 	}
-	info.Asks = append(info.Asks, Result{At: at, Text: oneLine(text, 400)})
+	if len(info.Asks) == 0 {
+		info.Ask, info.AskAt = line, at
+	}
+	info.Asks = append(info.Asks, Result{At: at, Text: line})
 }
 
 // noteSaid records the agent's newest reply while scanning newest first.

@@ -1107,3 +1107,54 @@ func TestScheduledSessionDisplay(t *testing.T) {
 	h.keys("L")
 	h.mustSee("WORK IN MOTION", "every 20m · 12m", "working · every 20m")
 }
+
+func TestCompactSidebarAndThreadHappening(t *testing.T) {
+	s1 := session("s1", "pt train", agents.Working, time.Minute, 1)
+	s2 := session("s2", "pt serving", agents.Ready, 2*time.Minute, 2)
+	s3 := session("s3", "slides", agents.Ready, 3*time.Minute, 3)
+	h := newHarness(t, []core.Session{s1, s2, s3}, true)
+
+	p1, _ := h.m.st.AddProject("Nabu", now)
+	th1, _ := h.m.st.AddThread(p1.ID, "Training")
+	th2, _ := h.m.st.AddThread(p1.ID, "Serving")
+	p2, _ := h.m.st.AddProject("Presentations", now)
+	th3, _ := h.m.st.AddThread(p2.ID, "AI Research")
+	h.m.st.AssignSession(s1.Key, p1.ID, th1.ID, "", now)
+	h.m.st.AssignSession(s2.Key, p1.ID, th2.ID, "", now)
+	h.m.st.AssignSession(s3.Key, p2.ID, th3.ID, "", now)
+	h.m.sums.Projects[p1.ID] = summary.Summary{
+		Headline: "Training and serving advancing",
+		Now:      "Training runs waves while serving checked A100 capacity.",
+		Sessions: map[string]string{
+			s1.Key: "Running wave 8 training checks.",
+			s2.Key: "Confirmed A100 fits full context.",
+		},
+	}
+	h.m.rebuildSide()
+
+	// Sidebar PROJECTS has no blank gap line between Nabu's last thread and Presentations.
+	sideLines, _ := h.m.buildSide(28, 30)
+	servingIdx, presIdx := -1, -1
+	for i, l := range sideLines {
+		plain := ansi.Strip(l)
+		if strings.Contains(plain, "Serving") {
+			servingIdx = i
+		}
+		if strings.Contains(plain, "Presentations") {
+			presIdx = i
+		}
+	}
+	if servingIdx < 0 || presIdx != servingIdx+1 {
+		t.Fatalf("expected Presentations immediately after Serving, got servingIdx=%d presIdx=%d", servingIdx, presIdx)
+	}
+
+	// Opening the Training thread scopes HAPPENING NOW to Training's session, not the whole project summary.
+	for i, it := range h.m.side {
+		if it.kind == sideThread && it.tid == th1.ID {
+			h.m.sideIdx = i
+			break
+		}
+	}
+	h.mustSee("HAPPENING NOW", "Running wave 8 training checks.")
+	h.mustNotSee("Confirmed A100 fits full context.")
+}

@@ -86,13 +86,17 @@ func (c *Copilot) Read(id string) (Info, error) {
 	if t, err := time.Parse(time.RFC3339, meta["updated_at"]); err == nil {
 		info.UpdatedAt = t
 	}
-	info.Arc = readCheckpointArc(ck)
+	var latestCk string
+	info.Arc, latestCk = readCheckpoints(ck)
 	if size > 0 {
 		if err := readCopilotEvents(events, &info); err != nil {
 			return info, err
 		}
 		if len(info.Arc) == 0 {
 			info.FirstAsk = firstCopilotAsk(events, info.Asks)
+		}
+		if latestCk != "" && len(info.Asks) == 0 && len(info.Results) == 0 {
+			info.Checkpoint = readCheckpointSummary(filepath.Join(filepath.Dir(ck), latestCk))
 		}
 	}
 
@@ -118,12 +122,20 @@ type copilotEvent struct {
 		RequestID  string `json:"requestId"`
 		ToolCallID string `json:"toolCallId"`
 		ToolName   string `json:"toolName"`
-		Arguments  struct {
+		Kind       struct {
+			Type    string `json:"type"`
+			ShellID string `json:"shellId"`
+		} `json:"kind"`
+		Result struct {
+			Content string `json:"content"`
+		} `json:"result"`
+		Arguments struct {
 			Message      string  `json:"message"`
 			Question     string  `json:"question"`
 			Action       string  `json:"action"`
 			ID           int     `json:"id"`
 			DelaySeconds float64 `json:"delaySeconds"`
+			ShellID      string  `json:"shellId"`
 		} `json:"arguments"`
 		PermissionRequest struct {
 			Kind            string `json:"kind"`
@@ -153,14 +165,21 @@ func readCopilotEvents(path string, info *Info) error {
 	activeSchedID := 0
 	activeSchedLabel := ""
 	firedActiveID := 0
+	bgDone := map[string]bool{}
+	bgActive := false
+	bgClosed := false
 	err := scanBackward(path, maxScanBytes, func(line []byte) bool {
 		typ := eventType(line)
 		isSched := typ == "session.schedule_created" || typ == "session.schedule_cancelled"
 		isWakeup := typ == "tool.execution_start" && bytes.Contains(line, []byte(`"manage_schedule"`))
-		if decided && !isSched && !isWakeup && typ != "user.message" && typ != "session.task_complete" && !(typ == "assistant.message" && info.Said == "") {
+		isBg := !bgClosed && ((typ == "system.notification" && bytes.Contains(line, []byte(`"shell_completed"`))) ||
+			(typ == "tool.execution_start" && bytes.Contains(line, []byte(`"stop_bash"`))) ||
+			(typ == "tool.execution_complete" && (bytes.Contains(line, []byte(`is still running`)) || bytes.Contains(line, []byte(`started in background`)) || bytes.Contains(line, []byte(`completed with exit code`)) || bytes.Contains(line, []byte(`has been stopped`)))) ||
+			typ == "session.resume" || typ == "session.shutdown")
+		if decided && !isSched && !isWakeup && !isBg && typ != "user.message" && typ != "session.task_complete" && !(typ == "assistant.message" && info.Said == "") {
 			return true
 		}
-		if !decided && !copilotStateTypes[typ] && typ != "" {
+		if !decided && !copilotStateTypes[typ] && !isBg && typ != "" {
 			if info.UpdatedAt.IsZero() || len(line) < 4096 {
 				noteTime(line, info)
 			}
@@ -177,6 +196,7 @@ func readCopilotEvents(path string, info *Info) error {
 		switch e.Type {
 		case "user.message":
 			if main {
+				bgClosed = true
 				info.noteAsk(e.Data.Content, e.Timestamp)
 				if id, ok := parseScheduledPromptID(e.Data.Content); ok {
 					schedFired[id]++
@@ -190,8 +210,11 @@ func readCopilotEvents(path string, info *Info) error {
 				info.noteSaid(e.Data.Content, e.Timestamp)
 			}
 		case "session.task_complete":
-			if main && len(info.Results) < maxResults && strings.TrimSpace(e.Data.Summary) != "" {
-				info.Results = append(info.Results, Result{At: e.Timestamp, Text: strings.TrimSpace(e.Data.Summary)})
+			if main {
+				bgClosed = true
+				if len(info.Results) < maxResults && strings.TrimSpace(e.Data.Summary) != "" {
+					info.Results = append(info.Results, Result{At: e.Timestamp, Text: strings.TrimSpace(e.Data.Summary)})
+				}
 			}
 		case "session.schedule_cancelled":
 			if e.Data.ID > 0 {
@@ -211,7 +234,25 @@ func readCopilotEvents(path string, info *Info) error {
 					activeSchedLabel = formatScheduleInterval(e.Data.IntervalMs)
 				}
 			}
+		case "session.resume", "session.shutdown":
+			// Attached background shells do not survive a process restart.
+			bgClosed = true
+		case "system.notification":
+			if !bgClosed && e.Data.Kind.Type == "shell_completed" && e.Data.Kind.ShellID != "" {
+				bgDone[e.Data.Kind.ShellID] = true
+			}
+		case "tool.execution_complete":
+			if main && !bgClosed {
+				if id, ok := parseCompletedShellID(e.Data.Result.Content); ok {
+					bgDone[id] = true
+				} else if id, ok := parseBgShellID(e.Data.Result.Content); ok && !bgDone[id] {
+					bgActive = true
+				}
+			}
 		case "tool.execution_start":
+			if !bgClosed && e.Data.ToolName == "stop_bash" && e.Data.Arguments.ShellID != "" {
+				bgDone[e.Data.Arguments.ShellID] = true
+			}
 			if e.Data.ToolName == "manage_schedule" && e.Data.Arguments.Action == "wakeup" {
 				if id := e.Data.Arguments.ID; id > 0 && !schedCancelled[id] && schedFired[id] == 0 && activeSchedID == 0 {
 					activeSchedID = id
@@ -232,6 +273,11 @@ func readCopilotEvents(path string, info *Info) error {
 		info.Scheduled = activeSchedLabel
 		// A session idling between scheduled check-ins is still running an
 		// autonomous loop, not finished and waiting for the user.
+		if info.State == Ready {
+			info.State = Working
+		}
+	} else if bgActive {
+		info.Scheduled = "background"
 		if info.State == Ready {
 			info.State = Working
 		}
@@ -326,15 +372,56 @@ func formatScheduleInterval(ms int64) string {
 	}
 }
 
-// readCheckpointArc parses Copilot CLI's checkpoints/index.md table and returns
-// a sampled chronological slice of milestone titles.
-func readCheckpointArc(path string) []string {
+// parseCompletedShellID extracts the shellId when a background shell finishes
+// via read_bash or stop_bash ("<shellId: 123 completed with exit code 0>").
+func parseCompletedShellID(content string) (string, bool) {
+	if !strings.Contains(content, "completed with exit code") && !strings.Contains(content, "has been stopped") {
+		return "", false
+	}
+	const marker = "shellId: "
+	i := strings.LastIndex(content, marker)
+	if i < 0 {
+		return "", false
+	}
+	rest := content[i+len(marker):]
+	end := strings.IndexAny(rest, " )>\n\r\t,")
+	if end >= 0 {
+		rest = rest[:end]
+	}
+	rest = strings.TrimSpace(rest)
+	return rest, rest != ""
+}
+
+// parseBgShellID extracts the shellId from Copilot CLI's background bash tool
+// output when a command continues running asynchronously after the turn ends.
+func parseBgShellID(content string) (string, bool) {
+	if !strings.Contains(content, "is still running") && !strings.Contains(content, "started in background") {
+		return "", false
+	}
+	const marker = "shellId: "
+	i := strings.Index(content, marker)
+	if i < 0 {
+		return "", false
+	}
+	rest := content[i+len(marker):]
+	end := strings.IndexAny(rest, " )>\n\r\t,")
+	if end >= 0 {
+		rest = rest[:end]
+	}
+	rest = strings.TrimSpace(rest)
+	return rest, rest != ""
+}
+
+// readCheckpoints parses Copilot CLI's checkpoints/index.md table and returns
+// a sampled chronological slice of milestone titles plus the newest checkpoint filename.
+func readCheckpoints(path string) ([]string, string) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
 	defer f.Close()
 	var titles []string
+	var latest string
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -351,8 +438,47 @@ func readCheckpointArc(path string) []string {
 		if title := oneLine(cols[2], 100); title != "" {
 			titles = append(titles, title)
 		}
+		if file := strings.TrimSpace(cols[3]); file != "" && !strings.Contains(file, "/") && !strings.Contains(file, "..") {
+			latest = file
+		}
 	}
-	return sampleArc(titles, maxArc)
+	return sampleArc(titles, maxArc), latest
+}
+
+// readCheckpointSummary extracts a concise status excerpt from a Copilot
+// checkpoint markdown file when recent asks/results have scrolled out of the
+// event log scan window.
+func readCheckpointSummary(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	txt := string(b)
+	section := func(tag string) string {
+		open, closeTag := "<"+tag+">", "</"+tag+">"
+		i := strings.Index(txt, open)
+		if i < 0 {
+			return ""
+		}
+		rest := txt[i+len(open):]
+		if j := strings.Index(rest, closeTag); j >= 0 {
+			rest = rest[:j]
+		}
+		return oneLine(rest, 320)
+	}
+	var parts []string
+	if s := section("work_done"); s != "" {
+		parts = append(parts, "Recent work: "+s)
+	}
+	if s := section("next_steps"); s != "" {
+		parts = append(parts, "Next: "+s)
+	}
+	if len(parts) == 0 {
+		if s := section("overview"); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return oneLine(strings.Join(parts, " "), 600)
 }
 
 // firstCopilotAsk grabs the session's opening user prompt when it is older than

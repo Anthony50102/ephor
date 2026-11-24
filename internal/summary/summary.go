@@ -31,19 +31,20 @@ type Input struct {
 
 // SessionInput describes one agent session.
 type SessionInput struct {
-	Key      string
-	Title    string
-	Thread   string
-	Kind     string
-	State    string
-	Reason   string
-	Branch   string
-	Updated  time.Time
-	Arc      []string // chronological milestone titles across the session's life
-	FirstAsk string   // opening prompt when no milestone arc exists
-	Asks     []string // newest first
-	Results  []string // newest first
-	Said     string
+	Key        string
+	Title      string
+	Thread     string
+	Kind       string
+	State      string
+	Reason     string
+	Branch     string
+	Updated    time.Time
+	Arc        []string // chronological milestone titles across the session's life
+	FirstAsk   string   // opening prompt when no milestone arc exists
+	Checkpoint string   // latest checkpoint summary when recent asks/results scrolled away
+	Asks       []string // newest first
+	Results    []string // newest first
+	Said       string
 }
 
 // Summary is one generated note.
@@ -114,9 +115,9 @@ The reader knows what the project is about at a high level, like a manager, but 
 Reply with only a JSON object, no code fence:
 {"headline": "...", "now": "...", "next": "...", "purpose": "...", "sessions": {"S1": "...", "S2": "..."}}
 
-- purpose: if the project has no stated purpose, write one or two concrete sentences describing the overarching vision, domain, and long-term direction of the WHOLE project across ALL its threads and session histories. Name the actual subject matter (what kind of models, system, or product is being built and to what end) rather than vague boilerplate like "building training, serving, and infrastructure for X". Never narrow it to a single thread's temporary task (such as hunting for a GPU instance, debugging one service, or landing a PR), and never just repeat the project name. If a PREVIOUSLY INFERRED PURPOSE is given, keep its breadth when it is already specific and accurate, or replace it with a richer, more concrete vision when the threads and histories show what the project is actually building. If the project already has a STATED PURPOSE, return "".
-- headline: a high-level status headline in six to twelve words covering the WHOLE project across its active threads, not just whichever single session moved most recently. Example: "SFT pipeline scaling; infra PR ready; serving hunting capacity" (no trailing period needed for a single phrase).
-- now: two or three plain sentences synthesizing where the WHOLE project stands across its threads and what it is pushing toward. Do not let one thread's recent troubleshooting hijack the whole summary. If a session is waiting on the user, mention that clearly without reducing the project to just that blocker. Prefer outcomes and direction over mechanics. Avoid file names, function names, and jargon unless essential. Present tense. Do not use em dashes.
+- purpose: if the project has no stated purpose, write one or two concrete sentences describing the overarching vision, domain, and long-term direction of the WHOLE project across ALL its threads and session histories. Name the actual subject matter (what kind of models, system, or product is being built and to what end) rather than vague boilerplate like "building training, serving, and infrastructure for X". Never narrow it to a single thread's temporary task or let one utility/side thread define a broader project when other threads cover a different scope, and never just repeat the project name. If a PREVIOUSLY INFERRED PURPOSE is given, keep its breadth when it is already specific and accurate, or replace it with a richer, more concrete vision when the threads and histories show what the project is actually building. If the project already has a STATED PURPOSE, return "".
+- headline: a high-level status headline in six to twelve words covering the WHOLE project across its active threads or sessions, never just whichever single session moved most recently or has the longest transcript. When multiple threads or sessions are active, summarize them in parallel clauses separated by semicolons. Example: "SFT pipeline scaling; infra PR ready; serving hunting capacity" (no trailing period needed for a single phrase).
+- now: two or three plain sentences synthesizing where the WHOLE project stands across ALL its threads and sessions. CRITICAL FOR MULTI-SESSION PROJECTS: give every active or recently active thread/session equal altitude, and spend at most ONE sentence on any single session. Never let one thread's recent details, bug fixes, or verbose transcript crowd out the other threads. If a session is waiting on the user, mention that clearly without reducing the project to just that blocker. Prefer outcomes and direction over mechanics. Avoid file names, function names, and jargon unless essential. Present tense. Do not use em dashes.
 - next: one short sentence on the project's next meaningful step, if the facts make it clear. Otherwise "".
 - In "headline", "now", "next", and "purpose", never write session labels like S1. The reader cannot see them. Describe the work instead, or name a thread or session title if helpful.
 - sessions: for every session label, at most twelve words on what it is doing or just finished.
@@ -142,6 +143,12 @@ Reply with only a JSON object, no code fence:
 			fmt.Fprintf(&b, "  - %s\n", c)
 		}
 	}
+	// Balance per-session prompt budget on multi-session projects so one
+	// verbose session cannot dominate the model's attention.
+	askLimit, askChars, resLimit, resChars, saidChars, ckChars := 4, maxText, 2, maxText, maxText*2, maxText
+	if len(in.Sessions) > 1 {
+		askLimit, askChars, resLimit, resChars, saidChars, ckChars = 2, 320, 1, 400, 450, 450
+	}
 	for i, s := range in.Sessions {
 		if i == maxSessions {
 			break
@@ -162,23 +169,29 @@ Reply with only a JSON object, no code fence:
 		if len(s.Arc) > 0 {
 			fmt.Fprintf(&b, "  history: %s\n", strings.Join(s.Arc, " -> "))
 		} else if s.FirstAsk != "" {
-			fmt.Fprintf(&b, "  started with: %s\n", clip(s.FirstAsk, maxText))
+			fmt.Fprintf(&b, "  started with: %s\n", clip(s.FirstAsk, askChars))
+		}
+		if s.Checkpoint != "" {
+			fmt.Fprintf(&b, "  latest checkpoint: %s\n", clip(s.Checkpoint, ckChars))
 		}
 		for j, a := range s.Asks {
+			if j == askLimit {
+				break
+			}
 			label := "earlier ask"
 			if j == 0 {
 				label = "latest ask"
 			}
-			fmt.Fprintf(&b, "  %s: %s\n", label, clip(a, maxText))
+			fmt.Fprintf(&b, "  %s: %s\n", label, clip(a, askChars))
 		}
 		for j, r := range s.Results {
-			if j == 2 {
+			if j == resLimit {
 				break
 			}
-			fmt.Fprintf(&b, "  finished: %s\n", clip(r, maxText))
+			fmt.Fprintf(&b, "  finished: %s\n", clip(r, resChars))
 		}
 		if s.Said != "" {
-			fmt.Fprintf(&b, "  agent's latest message: %s\n", clip(s.Said, maxText*2))
+			fmt.Fprintf(&b, "  agent's latest message: %s\n", clip(s.Said, saidChars))
 		}
 	}
 	return b.String()

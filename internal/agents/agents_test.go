@@ -345,3 +345,54 @@ func TestCopilotScheduledPrompts(t *testing.T) {
 		t.Fatalf("self-paced wakeup: state=%v scheduled=%q; want working / every 30m", wakeup.State, wakeup.Scheduled)
 	}
 }
+
+func TestCopilotBackgroundCheckpointAndDedupAsks(t *testing.T) {
+	// Active background bash shell after the last user message keeps session Working.
+	dir := t.TempDir()
+	sdir := filepath.Join(dir, "bg")
+	_ = os.MkdirAll(filepath.Join(sdir, "checkpoints"), 0o755)
+	_ = os.WriteFile(filepath.Join(sdir, "checkpoints", "index.md"), []byte(
+		"# Checkpoints\n\n| # | Title | File |\n|---|-------|------|\n| 1 | Wave 8 | 001-wave8.md |\n",
+	), 0o644)
+	_ = os.WriteFile(filepath.Join(sdir, "checkpoints", "001-wave8.md"), []byte(
+		"<work_done>Built wave 8 authoring brief.</work_done>\n<next_steps>Fix relay rotation.</next_steps>\n",
+	), 0o644)
+	_ = os.WriteFile(filepath.Join(sdir, "events.jsonl"), []byte(
+		`{"type":"tool.execution_complete","timestamp":"2026-11-24T21:10:00Z","data":{"toolCallId":"t1","result":{"content":"<command with shellId: 14444 is still running after 30 seconds.>"}}}`+"\n"+
+			`{"type":"assistant.message","timestamp":"2026-11-24T21:10:05Z","data":{"content":"Waiting for the next check."}}`+"\n"+
+			`{"type":"assistant.turn_end","timestamp":"2026-11-24T21:10:06Z","data":{"turnId":"4"}}`+"\n",
+	), 0o644)
+	c := &Copilot{Dir: dir}
+	info, err := c.Read("bg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State != Working || info.Scheduled != "background" {
+		t.Fatalf("active bg: state=%v scheduled=%q; want working / background", info.State, info.Scheduled)
+	}
+	if !strings.Contains(info.Checkpoint, "Built wave 8 authoring brief.") || !strings.Contains(info.Checkpoint, "Fix relay rotation.") {
+		t.Fatalf("expected latest checkpoint summary, got %q", info.Checkpoint)
+	}
+
+	// Completed or older-turn background shell does not keep the session Working.
+	sdir2 := filepath.Join(dir, "bg-done")
+	_ = os.MkdirAll(sdir2, 0o755)
+	_ = os.WriteFile(filepath.Join(sdir2, "events.jsonl"), []byte(
+		`{"type":"tool.execution_complete","timestamp":"2026-11-24T19:00:00Z","data":{"toolCallId":"t1","result":{"content":"<command with shellId: 99 is still running after 30 seconds.>"}}}`+"\n"+
+			`{"type":"user.message","timestamp":"2026-11-24T20:00:00Z","data":{"content":"first human ask"}}`+"\n"+
+			`{"type":"user.message","timestamp":"2026-11-24T20:05:00Z","data":{"content":"[Scheduled prompt #1] poll"}}`+"\n"+
+			`{"type":"user.message","timestamp":"2026-11-24T20:10:00Z","data":{"content":"[Scheduled prompt #1] poll"}}`+"\n"+
+			`{"type":"session.schedule_cancelled","timestamp":"2026-11-24T20:11:00Z","data":{"id":1}}`+"\n"+
+			`{"type":"assistant.turn_end","timestamp":"2026-11-24T20:11:05Z","data":{"turnId":"2"}}`+"\n",
+	), 0o644)
+	info2, err := c.Read("bg-done")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info2.State != Ready || info2.Scheduled != "" {
+		t.Fatalf("older bg: state=%v scheduled=%q; want ready / empty", info2.State, info2.Scheduled)
+	}
+	if len(info2.Asks) != 2 || info2.Asks[1].Text != "first human ask" {
+		t.Fatalf("repeated asks should deduplicate while keeping earlier asks, got %+v", info2.Asks)
+	}
+}

@@ -72,12 +72,16 @@ func (m Model) summaryInput(pid string) summary.Input {
 		}
 		state := stateName(s.State(now))
 		if s.State(now) == agents.Working && s.Info.Scheduled != "" {
-			state = "working (scheduled check-in " + s.Info.Scheduled + ")"
+			if s.Info.Scheduled == "background" {
+				state = "working (waiting on background command)"
+			} else {
+				state = "working (scheduled check-in " + s.Info.Scheduled + ")"
+			}
 		}
 		si := summary.SessionInput{
 			Key: s.Key, Title: s.Title(), Thread: thread, Kind: s.Kind, State: state,
 			Reason: s.Info.Reason, Branch: s.Info.Branch, Updated: s.Info.UpdatedAt,
-			Arc: s.Info.Arc, FirstAsk: s.Info.FirstAsk, Said: s.Info.Said,
+			Arc: s.Info.Arc, FirstAsk: s.Info.FirstAsk, Checkpoint: s.Info.Checkpoint, Said: s.Info.Said,
 		}
 		for _, a := range s.Info.Asks {
 			si.Asks = append(si.Asks, a.Text)
