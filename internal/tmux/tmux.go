@@ -130,18 +130,43 @@ func (c Client) Pretype(paneID, text string) error {
 	return err
 }
 
+// PoolSession is the background tmux session where Switchboard parks agent
+// windows so the user's main session stays uncluttered.
+const PoolSession = "agents"
+
 // homeOpt is a pane option holding where a docked pane came from, so it can
 // go back even after Switchboard restarts.
 const homeOpt = "@switchboard-home"
 
+func exactSession(s string) string {
+	if s == "" || strings.HasPrefix(s, "$") {
+		return s
+	}
+	return "=" + s
+}
+
+func (c Client) hasSession(session string) bool {
+	if session == "" {
+		return false
+	}
+	_, err := c.Run("has-session", "-t", exactSession(session))
+	return err == nil
+}
+
 // Dock moves an agent's pane into the host pane's window, to its right, and
 // selects it. width is a tmux size such as "60%".
 func (c Client) Dock(paneID, hostPane, width string) error {
-	out, err := c.Run("display-message", "-p", "-t", paneID, "#{session_id}"+sep+"#{window_id}"+sep+"#{window_index}"+sep+"#{window_name}")
+	out, err := c.Run("display-message", "-p", "-t", paneID,
+		"#{session_id}"+sep+"#{window_id}"+sep+"#{window_index}"+sep+"#{window_name}"+sep+"#{session_name}")
 	if err != nil {
 		return err
 	}
-	home := strings.TrimSpace(out) + sep + hostPane
+	f := strings.Split(strings.TrimSpace(out), sep)
+	if len(f) < 5 {
+		return fmt.Errorf("unexpected tmux reply for %s", paneID)
+	}
+	// Keep hostPane at index 4 so Orphans stays compatible with older homes.
+	home := strings.Join([]string{f[0], f[1], f[2], f[3], hostPane, f[4]}, sep)
 	if _, err := c.Run("set-option", "-p", "-t", paneID, homeOpt, home); err != nil {
 		return err
 	}
@@ -152,8 +177,25 @@ func (c Client) Dock(paneID, hostPane, width string) error {
 	return nil
 }
 
-// Undock sends a docked pane back to its window, or to a new window at its
-// old index when that window closed with it, and leaves the host focused.
+// Rehome updates a docked pane's saved return address so Undock sends it to
+// poolSession instead of the session it originally came from.
+func (c Client) Rehome(paneID, poolSession string) error {
+	out, err := c.Run("show-options", "-p", "-v", "-t", paneID, homeOpt)
+	if err != nil {
+		return err
+	}
+	f := strings.Split(strings.TrimSpace(out), sep)
+	if len(f) < 5 {
+		return fmt.Errorf("pane %s has no home to update", paneID)
+	}
+	home := strings.Join([]string{"", "", "", f[3], f[4], poolSession}, sep)
+	_, err = c.Run("set-option", "-p", "-t", paneID, homeOpt, home)
+	return err
+}
+
+// Undock sends a docked pane back to its window, or to a new window in its
+// home session (recreating that session if docking its last window closed it),
+// and leaves the host focused.
 func (c Client) Undock(paneID string) error {
 	out, err := c.Run("show-options", "-p", "-v", "-t", paneID, homeOpt)
 	if err != nil {
@@ -164,19 +206,106 @@ func (c Client) Undock(paneID string) error {
 		return fmt.Errorf("pane %s has no home to go back to", paneID)
 	}
 	session, window, index, name := f[0], f[1], f[2], f[3]
-	if c.windowExists(window) {
-		_, err = c.Run("join-pane", "-d", "-h", "-s", paneID, "-t", window)
-		if err != nil {
+	sessionName := ""
+	if len(f) >= 6 {
+		sessionName = f[5]
+	}
+	switch {
+	case window != "" && c.windowExists(window):
+		if _, err := c.Run("join-pane", "-d", "-h", "-s", paneID, "-t", window); err != nil {
 			return err
 		}
-	} else if _, err := c.Run("break-pane", "-d", "-s", paneID, "-n", name, "-t", session+":"+index); err != nil {
-		// The index was taken meanwhile; any free one will do.
-		if _, err := c.Run("break-pane", "-d", "-s", paneID, "-n", name, "-t", session+":"); err != nil {
+	case session != "" && c.hasSession(session):
+		target := exactSession(session) + ":"
+		if index != "" {
+			if _, err := c.Run("break-pane", "-d", "-s", paneID, "-n", name, "-t", target+index); err == nil {
+				break
+			}
+		}
+		if _, err := c.Run("break-pane", "-d", "-s", paneID, "-n", name, "-t", target); err != nil {
+			return err
+		}
+	default:
+		if sessionName == "" {
+			sessionName = PoolSession
+		}
+		if err := c.breakToSession(paneID, name, sessionName); err != nil {
 			return err
 		}
 	}
 	_, err = c.Run("set-option", "-p", "-u", "-t", paneID, homeOpt)
 	return err
+}
+
+// breakToSession breaks paneID into its own window in sessionName, creating
+// sessionName without leaving a blank shell window behind if needed.
+func (c Client) breakToSession(paneID, name, sessionName string) error {
+	placeholder := ""
+	if !c.hasSession(sessionName) {
+		out, err := c.Run("new-session", "-d", "-P", "-F", "#{window_id}", "-s", sessionName)
+		if err != nil {
+			return err
+		}
+		placeholder = strings.TrimSpace(out)
+	}
+	args := []string{"break-pane", "-d", "-s", paneID, "-t", exactSession(sessionName) + ":"}
+	if name != "" {
+		args = append(args, "-n", name)
+	}
+	if _, err := c.Run(args...); err != nil {
+		if placeholder != "" {
+			_, _ = c.Run("kill-window", "-t", placeholder)
+		}
+		return err
+	}
+	if placeholder != "" {
+		_, _ = c.Run("kill-window", "-t", placeholder)
+	}
+	return nil
+}
+
+// Park moves an agent pane into poolSession so it stays out of the user's main
+// session. Single-pane windows move whole; multi-pane windows split out just
+// the agent pane so sibling shells stay put. Returns false when already parked.
+func (c Client) Park(paneID, poolSession, hostPane string) (bool, error) {
+	if paneID == "" || paneID == hostPane {
+		return false, nil
+	}
+	out, err := c.Run("display-message", "-p", "-t", paneID,
+		"#{session_name}"+sep+"#{window_id}"+sep+"#{window_name}"+sep+"#{window_panes}")
+	if err != nil {
+		return false, err
+	}
+	f := strings.Split(strings.TrimSpace(out), sep)
+	if len(f) < 4 {
+		return false, fmt.Errorf("unexpected tmux reply for %s", paneID)
+	}
+	sessName, winID, winName := f[0], f[1], f[2]
+	panes, _ := strconv.Atoi(f[3])
+	if sessName == poolSession {
+		return false, nil
+	}
+	if panes > 1 {
+		return true, c.breakToSession(paneID, winName, poolSession)
+	}
+	placeholder := ""
+	if !c.hasSession(poolSession) {
+		pout, err := c.Run("new-session", "-d", "-P", "-F", "#{window_id}", "-s", poolSession)
+		if err != nil {
+			return false, err
+		}
+		placeholder = strings.TrimSpace(pout)
+	}
+	if _, err := c.Run("move-window", "-d", "-s", winID, "-t", exactSession(poolSession)+":"); err != nil {
+		if placeholder != "" {
+			_, _ = c.Run("kill-window", "-t", placeholder)
+		}
+		return false, err
+	}
+	if placeholder != "" {
+		_, _ = c.Run("kill-window", "-t", placeholder)
+	}
+	return true, nil
 }
 
 func (c Client) windowExists(id string) bool {
@@ -238,9 +367,14 @@ func (c Client) Screen(paneID string) (string, error) {
 }
 
 // NewWindow opens a detached window in session (the current or first session
-// when empty) and returns its pane ID. With no tmux server running it starts
-// a detached session named "switchboard".
+// when empty) and returns its pane ID. If a named session does not exist yet,
+// it creates that detached session with the new window. With no tmux server
+// running it starts a detached session named "switchboard".
 func (c Client) NewWindow(session, name, dir string) (string, error) {
+	if session != "" && !strings.HasPrefix(session, "$") && !c.hasSession(session) {
+		out, err := c.Run("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", session, "-n", name, "-c", dir)
+		return strings.TrimSpace(out), err
+	}
 	args := []string{"new-window", "-d", "-P", "-F", "#{pane_id}", "-n", name, "-c", dir}
 	if session == "" && !InsideTmux() {
 		out, err := c.Run("list-sessions", "-F", "#{session_id}")
@@ -251,7 +385,7 @@ func (c Client) NewWindow(session, name, dir string) (string, error) {
 		session, _, _ = strings.Cut(strings.TrimSpace(out), "\n")
 	}
 	if session != "" {
-		args = append(args, "-t", session+":")
+		args = append(args, "-t", exactSession(session)+":")
 	}
 	out, err := c.Run(args...)
 	return strings.TrimSpace(out), err

@@ -558,7 +558,7 @@ func TestLaunchCopilotIntoProject(t *testing.T) {
 		t.Fatalf("launches = %d", len(got))
 	}
 	r := got[0]
-	if r.Dir != dir || r.Window != "nabu-work" || r.Session != "$0" {
+	if r.Dir != dir || r.Window != "nabu-work" || r.Session != tmux.PoolSession {
 		t.Fatalf("request = %+v", r)
 	}
 	id, rest, _ := strings.Cut(strings.TrimPrefix(r.Command, "copilot --session-id "), " ")
@@ -921,5 +921,53 @@ func TestUXPolish(t *testing.T) {
 	h.send(tea.MouseMsg{X: 4, Y: 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
 	if h.m.focus != focusSide {
 		t.Fatalf("left-click in left pane should focus sidebar, got %d", h.m.focus)
+	}
+}
+
+func TestParkAgents(t *testing.T) {
+	a := session("a", "alpha", agents.Working, time.Minute, 1)
+	b := session("b", "beta", agents.Working, 2*time.Minute, 2)
+	c := session("c", "gamma", agents.Ready, 3*time.Minute, 3)
+	c.Pane.SessionName = tmux.PoolSession
+
+	h := newHarness(t, []core.Session{a, b, c}, true)
+	var log []string
+	h.m.opt.Dock = func(id string) error { log = append(log, "dock "+id); return nil }
+	h.m.opt.Undock = func(id string) error { log = append(log, "undock "+id); return nil }
+	h.m.opt.Rehome = func(id string) error { log = append(log, "rehome "+id); return nil }
+	h.m.opt.Park = func(id string) (bool, error) { log = append(log, "park "+id); return true, nil }
+	h.m.focus = focusSessions
+
+	// Dock alpha, then press P (park all): beta parks immediately, gamma is
+	// skipped (already in agents), and alpha stays docked but is re-homed.
+	h.keys("v")
+	h.keys("P")
+	if h.m.Docked() != "%a" {
+		t.Fatalf("park-all should keep docked agent open, got %q", h.m.Docked())
+	}
+	h.mustSee("Parked 1 agent in agents (docked agent will return there too).")
+	want := "dock %a|rehome %a|park %b"
+	if strings.Join(log, "|") != want {
+		t.Fatalf("log = %q, want %q", strings.Join(log, "|"), want)
+	}
+
+	// Pressing p directly on the docked session re-homes and undocks it into agents.
+	log = nil
+	h.keys("p")
+	if h.m.Docked() != "" {
+		t.Fatalf("p on docked session should undock it, got %q", h.m.Docked())
+	}
+	if strings.Join(log, "|") != "rehome %a|undock %a" {
+		t.Fatalf("p on docked log = %q", strings.Join(log, "|"))
+	}
+	h.mustSee("Parked alpha in agents.")
+
+	// :park-all also works from command mode.
+	log = nil
+	h.keys(":")
+	h.typeText("park-all")
+	h.keys("enter")
+	if strings.Join(log, "|") != "park %a|park %b" {
+		t.Fatalf(":park-all log = %q", strings.Join(log, "|"))
 	}
 }

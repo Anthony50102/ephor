@@ -108,6 +108,11 @@ type Options struct {
 	Dock   func(paneID string) error
 	Undock func(paneID string) error
 
+	// Park moves an agent pane into the background agents pool session.
+	// Rehome updates a docked pane's saved return address to that pool.
+	Park   func(paneID string) (bool, error)
+	Rehome func(paneID string) error
+
 	// SelectPane moves to the tmux pane beside Switchboard's.
 	SelectPane func(dir string) error
 
@@ -259,11 +264,13 @@ func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
 		return pane, src.Tmux.Pretype(pane, r.Pretype)
 	}
 	self := os.Getenv("TMUX_PANE")
+	opt.Park = func(id string) (bool, error) { return src.Tmux.Park(id, tmux.PoolSession, self) }
 	if tmux.InsideTmux() {
 		opt.Show = src.Tmux.Show
 		if self != "" {
 			opt.Dock = func(id string) error { return src.Tmux.Dock(id, self, dockWidth) }
 			opt.Undock = src.Tmux.Undock
+			opt.Rehome = func(id string) error { return src.Tmux.Rehome(id, tmux.PoolSession) }
 			opt.SelectPane = func(dir string) error { return src.Tmux.SelectPane(self, dir) }
 			// Agents left docked by a Switchboard that crashed go home.
 			if ids, err := src.Tmux.Orphans(); err == nil {

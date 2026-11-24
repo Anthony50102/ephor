@@ -47,8 +47,8 @@ session's window; outside tmux it attaches.
 
 Press `o` in a project or thread to start Copilot there. Switchboard asks for
 the folder (it suggests where that project's latest session runs) and an
-optional first task. It then opens a new tmux window next to the project's
-other sessions and types this into it:
+optional first task. It then opens a new tmux window in a detached `agents`
+session (keeping your main tmux window bar clean) and types this into it:
 
 ```sh
 copilot --session-id <new uuid> --name '<project or thread>' -i '<task>'
@@ -73,6 +73,12 @@ vim-tmux-navigator). `v` again sends it back to its own window; `v` on another
 session swaps. Docking only moves the pane, so the agent never notices.
 Quitting Switchboard sends a docked agent back, and if Switchboard crashes,
 the next start sends it back. Docking needs Switchboard running inside tmux.
+
+To clear existing agent windows out of your main tmux session, press `P` (or
+`:park-all`) to move every live agent window into the background `agents`
+session without touching your regular shells. Press `p` (or `:park`) to park
+just the selected session. If an agent is currently docked when you run `P`,
+it stays open beside Switchboard and returns to `agents` when you undock it.
 
 Keys follow LazyVim and the Snacks explorer. Press `space` for a which-key menu
 of actions.
@@ -99,13 +105,14 @@ With the sessions panel hidden, the list moves into the bottom of the brief.
 | `enter` in the sessions panel | jump to the session's tmux window |
 | `i` / `o` | type a quick answer to the session / start Copilot in this project or thread |
 | `v` | dock the session's real terminal beside Switchboard; `v` again sends it back |
+| `p` / `P` | park this session / all live agent windows into the background `agents` tmux session |
 | `m` / `a` | move session to a project / accept suggestion |
 | `n` `t` `e` `r` `d` | new project, new thread, describe, rename, delete |
 | `/` | filter sessions (`esc` clears); `space space` searches all |
 | `u` / `space s` | refresh now / rewrite this project's summary |
 | `y` / `s` on an INFRASTRUCTURE row | copy how to reach the machine or cluster / open a shell on it in a new tmux window |
 | `space c` | check cloud resources with Azure (and open clusters with kubectl) now |
-| `:q`, `:new <name>`, `:help` | command line |
+| `:q`, `:new <name>`, `:park`, `:park-all`, `:help` | command line |
 | `space`, `?` | which-key menu, all keys |
 
 `ctrl-h` and `ctrl-l` only reach Switchboard if your tmux

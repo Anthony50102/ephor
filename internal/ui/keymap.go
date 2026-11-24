@@ -55,6 +55,8 @@ const (
 	aCopy
 	aConnect
 	aDock
+	aPark
+	aParkAll
 	aNavLeft
 	aNavRight
 	aNavDown
@@ -73,6 +75,7 @@ var normalKeys = map[string]action{
 	"enter": aEnter, "m": aMove, "a": aAccept,
 	"n": aNewProject, "t": aNewThread, "e": aDescribe, "r": aRename, "d": aDelete,
 	"o": aLaunch, "i": aReply, "y": aCopy, "s": aConnect, "v": aDock,
+	"p": aPark, "P": aParkAll,
 	"/": aFilter, "esc": aEsc, "u": aRefresh, ":": aCommand,
 }
 
@@ -91,6 +94,8 @@ var prefixes = map[string][]keyHint{
 		{"o", "start Copilot here", aLaunch},
 		{"i", "type to the session", aReply},
 		{"v", "dock the session beside this panel (again sends it back)", aDock},
+		{"p", "park this session in the background agents session", aPark},
+		{"P", "park all agent windows in the background agents session", aParkAll},
 		{"n", "new project", aNewProject},
 		{"t", "new thread", aNewThread},
 		{"e", "toggle projects panel", aToggleSide},
@@ -288,6 +293,10 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		return m, m.forceSummary()
 	case aDock:
 		m.toggleDock()
+	case aPark:
+		return m, m.parkOne()
+	case aParkAll:
+		return m, m.parkAll()
 	case aCopy:
 		m.copyAccess()
 	case aConnect:
@@ -333,8 +342,15 @@ func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
 		} else {
 			m.commitNewProject(arg, "")
 		}
+	case "park":
+		if arg == "all" {
+			return m, m.parkAll()
+		}
+		return m, m.parkOne()
+	case "park-all", "parkall":
+		return m, m.parkAll()
 	default:
-		m.setErr(fmt.Errorf("not a command: %s (try :q, :help, :new <name>)", cmd))
+		m.setErr(fmt.Errorf("not a command: %s (try :q, :help, :new <name>, :park, :park-all)", cmd))
 	}
 	return m, nil
 }

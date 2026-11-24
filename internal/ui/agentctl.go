@@ -10,6 +10,7 @@ import (
 
 	"github.com/anthonypoole/switchboard/internal/core"
 	"github.com/anthonypoole/switchboard/internal/store"
+	"github.com/anthonypoole/switchboard/internal/tmux"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -111,11 +112,7 @@ func (m *Model) launch(dir, task string) {
 			return
 		}
 	}
-	req := LaunchReq{Dir: dir, Window: windowName(name), Command: copilotCommand(id, name, task)}
-	for _, s := range m.sessionsIn(m.scope()) {
-		req.Session = s.Pane.SessionID
-		break
-	}
+	req := LaunchReq{Session: tmux.PoolSession, Dir: dir, Window: windowName(name), Command: copilotCommand(id, name, task)}
 	pane, err := m.opt.Launch(req)
 	if err != nil {
 		if pid != "" {
@@ -129,7 +126,7 @@ func (m *Model) launch(dir, task string) {
 	if pid != "" {
 		where = name
 	}
-	m.setStatus(fmt.Sprintf("Started Copilot in %s (%s). It shows up here in a few seconds.", where, pane))
+	m.setStatus(fmt.Sprintf("Started Copilot in %s (%s %s). Press v to dock it.", where, tmux.PoolSession, pane))
 }
 
 // copilotCommand is the shell line typed into the new window. Typing it,
