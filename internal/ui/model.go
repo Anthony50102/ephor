@@ -196,6 +196,7 @@ type Model struct {
 	viewedPID string
 	newSince  map[string]time.Time
 
+	count     int // Vim-style numeric prefix, e.g. 10 in 10j (0 means unset)
 	status    string
 	statusErr bool
 
@@ -605,23 +606,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case modeConfirm:
 			return m.updateConfirm(msg)
 		case modeHelp:
-			switch msg.String() {
-			case "j", "down", "ctrl+e":
-				m.scrollHelp(1)
-			case "k", "up", "ctrl+y":
-				m.scrollHelp(-1)
-			case "ctrl+d":
-				m.scrollHelp(m.height / 2)
-			case "ctrl+u":
-				m.scrollHelp(-m.height / 2)
-			case "g", "home":
-				m.helpOff = 0
-			case "G", "end":
-				m.scrollHelp(1 << 20)
-			default:
-				m.mode = modeNormal
-			}
-			return m, nil
+			return m.updateHelp(msg)
 		}
 		return m.updateNormal(msg)
 	}
@@ -812,17 +797,64 @@ func (m Model) orgSession() (core.Session, bool) {
 	return core.Session{}, false
 }
 
+func (m Model) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	k := msg.String()
+	if m.pushCount(k) {
+		return m, nil
+	}
+	if k == "esc" && m.count > 0 {
+		m.count = 0
+		return m, nil
+	}
+	n := m.takeCount()
+	switch k {
+	case "j", "down", "ctrl+e":
+		m.scrollHelp(n)
+	case "k", "up", "ctrl+y":
+		m.scrollHelp(-n)
+	case "ctrl+d":
+		m.scrollHelp(n * max(1, m.height/2))
+	case "ctrl+u":
+		m.scrollHelp(-n * max(1, m.height/2))
+	case "g", "home":
+		m.helpOff = 0
+	case "G", "end":
+		m.scrollHelp(1 << 20)
+	default:
+		m.mode = modeNormal
+	}
+	return m, nil
+}
+
 func (m Model) updateOrganize(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	k := msg.String()
+	if m.pushCount(k) {
+		return m, nil
+	}
+	if k == "esc" && m.count > 0 {
+		m.count = 0
+		return m, nil
+	}
+	hasCount := m.count > 0
+	n := m.takeCount()
+	switch k {
 	case "esc", "q":
 		m.mode = modeNormal
 	case "j", "down":
-		if m.orgIdx < len(m.orgOpts)-1 {
-			m.orgIdx++
-		}
+		m.orgIdx = min(len(m.orgOpts)-1, m.orgIdx+n)
 	case "k", "up":
-		if m.orgIdx > 0 {
-			m.orgIdx--
+		m.orgIdx = max(0, m.orgIdx-n)
+	case "g", "home":
+		if hasCount {
+			m.orgIdx = max(0, min(len(m.orgOpts)-1, n-1))
+		} else {
+			m.orgIdx = 0
+		}
+	case "G", "end":
+		if hasCount {
+			m.orgIdx = max(0, min(len(m.orgOpts)-1, n-1))
+		} else {
+			m.orgIdx = max(0, len(m.orgOpts)-1)
 		}
 	case "n":
 		m.startInput(inNewProject, "", "", m.orgKey, "")

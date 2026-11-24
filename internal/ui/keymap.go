@@ -55,6 +55,7 @@ const (
 	aCopy
 	aConnect
 	aDock
+	aUndock
 	aPark
 	aParkAll
 	aNavLeft
@@ -74,7 +75,7 @@ var normalKeys = map[string]action{
 	"H": aPrevProject, "L": aNextProject,
 	"enter": aEnter, "m": aMove, "a": aAccept,
 	"n": aNewProject, "t": aNewThread, "e": aDescribe, "r": aRename, "d": aDelete,
-	"o": aLaunch, "i": aReply, "y": aCopy, "s": aConnect, "v": aDock,
+	"o": aLaunch, "i": aReply, "y": aCopy, "s": aConnect, "v": aDock, "V": aUndock,
 	"p": aPark, "P": aParkAll,
 	"/": aFilter, "esc": aEsc, "u": aRefresh, ":": aCommand,
 }
@@ -94,6 +95,7 @@ var prefixes = map[string][]keyHint{
 		{"o", "start Copilot here", aLaunch},
 		{"i", "type to the session", aReply},
 		{"v", "dock the session beside this panel (again sends it back)", aDock},
+		{"V", "undock the docked session from anywhere", aUndock},
 		{"p", "park this session in the background agents session", aPark},
 		{"P", "park all agent windows in the background agents session", aParkAll},
 		{"n", "new project", aNewProject},
@@ -127,6 +129,35 @@ func hintKey(k string) string {
 	return k
 }
 
+// pushCount accumulates Vim-style numeric motion prefixes (1-9, and 0 once a
+// count has started). Returns true if k was consumed as part of the count.
+func (m *Model) pushCount(k string) bool {
+	if len(k) != 1 || k[0] < '0' || k[0] > '9' {
+		return false
+	}
+	d := int(k[0] - '0')
+	if d == 0 && m.count == 0 {
+		return false
+	}
+	const maxCount = 9999
+	if m.count*10+d <= maxCount {
+		m.count = m.count*10 + d
+	} else {
+		m.count = maxCount
+	}
+	return true
+}
+
+// takeCount returns the active count (defaulting to 1) and resets it.
+func (m *Model) takeCount() int {
+	n := m.count
+	m.count = 0
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
 func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	k := msg.String()
@@ -134,6 +165,7 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		p := m.pending
 		m.pending = ""
 		if k == "esc" {
+			m.count = 0
 			return m, nil
 		}
 		for _, h := range prefixes[p] {
@@ -141,7 +173,15 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.do(h.act)
 			}
 		}
+		m.count = 0
 		m.setErr(fmt.Errorf("%s%s is not mapped", prefixLabel(p), k))
+		return m, nil
+	}
+	if m.pushCount(k) {
+		return m, nil
+	}
+	if k == "esc" && m.count > 0 {
+		m.count = 0
 		return m, nil
 	}
 	if _, ok := prefixes[k]; ok {
@@ -152,6 +192,8 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) do(a action) (tea.Model, tea.Cmd) {
+	hasCount := m.count > 0
+	n := m.takeCount()
 	switch a {
 	case aQuit:
 		return m, tea.Quit
@@ -159,36 +201,48 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		m.mode = modeHelp
 		m.helpOff = 0
 	case aFocusToggle:
-		switch m.focus {
-		case focusSide:
-			m.focus = focusCenter
-			m.ensureCard()
-		case focusCenter:
-			m.focus = focusSessions
-		default:
-			m.focus = focusSide
-			m.fixFocus()
+		for range n {
+			switch m.focus {
+			case focusSide:
+				m.focus = focusCenter
+				m.ensureCard()
+			case focusCenter:
+				m.focus = focusSessions
+			default:
+				m.focus = focusSide
+				m.fixFocus()
+			}
 		}
 	case aFocusSide:
-		m.focusLeft()
+		for range n {
+			m.focusLeft()
+		}
 	case aFocusSessions:
-		m.focusRight()
+		for range n {
+			m.focusRight()
+		}
 	case aNavLeft, aNavRight, aNavDown, aNavUp:
-		m.navigate(a)
+		for range n {
+			m.navigate(a)
+		}
 	case aDown, aUp:
-		dir := 1
+		delta := n
 		if a == aUp {
-			dir = -1
+			delta = -n
 		}
 		switch m.focus {
 		case focusSide:
-			m.setSide(m.sideIdx + dir)
+			m.setSide(m.sideIdx + delta)
 		case focusCenter:
-			m.moveCard(dir)
+			m.moveCard(delta)
 		default:
-			m.selectSession(m.sessIdx + dir)
+			m.selectSession(m.sessIdx + delta)
 		}
 	case aTop:
+		if hasCount {
+			m.jumpIndex(n - 1)
+			return m, nil
+		}
 		switch m.focus {
 		case focusSide:
 			m.setSide(0)
@@ -198,6 +252,10 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 			m.selectSession(0)
 		}
 	case aBottom:
+		if hasCount {
+			m.jumpIndex(n - 1)
+			return m, nil
+		}
 		switch m.focus {
 		case focusSide:
 			m.setSide(len(m.side) - 1)
@@ -213,21 +271,29 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 	case aZen:
 		m.toggleZen()
 	case aHalfDown:
-		m.scrollCenter(m.height / 2)
+		m.scrollCenter(n * max(1, m.height/2))
 	case aHalfUp:
-		m.scrollCenter(-m.height / 2)
+		m.scrollCenter(-n * max(1, m.height/2))
 	case aLineDown:
-		m.scrollCenter(1)
+		m.scrollCenter(n)
 	case aLineUp:
-		m.scrollCenter(-1)
+		m.scrollCenter(-n)
 	case aPrevProject:
-		m.stepProject(-1)
+		for range n {
+			m.stepProject(-1)
+		}
 	case aNextProject:
-		m.stepProject(1)
+		for range n {
+			m.stepProject(1)
+		}
 	case aNextNeeds:
-		m.stepNeedsYou(1)
+		for range n {
+			m.stepNeedsYou(1)
+		}
 	case aPrevNeeds:
-		m.stepNeedsYou(-1)
+		for range n {
+			m.stepNeedsYou(-1)
+		}
 	case aEnter:
 		switch m.focus {
 		case focusSide:
@@ -293,6 +359,8 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		return m, m.forceSummary()
 	case aDock:
 		m.toggleDock()
+	case aUndock:
+		m.undockAny()
 	case aPark:
 		return m, m.parkOne()
 	case aParkAll:
@@ -320,6 +388,19 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// jumpIndex moves the focused list or card pane directly to 0-based index idx,
+// used for Vim-style {count}G and {count}gg jumps.
+func (m *Model) jumpIndex(idx int) {
+	switch m.focus {
+	case focusSide:
+		m.setSide(idx)
+	case focusCenter:
+		m.selectCard(idx)
+	default:
+		m.selectSession(idx)
+	}
+}
+
 // runCommand handles the : command line. Only the commands a Vim user would
 // reach for by habit are supported.
 func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
@@ -342,6 +423,8 @@ func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
 		} else {
 			m.commitNewProject(arg, "")
 		}
+	case "undock":
+		m.undockAny()
 	case "park":
 		if arg == "all" {
 			return m, m.parkAll()
@@ -350,7 +433,7 @@ func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
 	case "park-all", "parkall":
 		return m, m.parkAll()
 	default:
-		m.setErr(fmt.Errorf("not a command: %s (try :q, :help, :new <name>, :park, :park-all)", cmd))
+		m.setErr(fmt.Errorf("not a command: %s (try :q, :help, :new <name>, :undock, :park, :park-all)", cmd))
 	}
 	return m, nil
 }

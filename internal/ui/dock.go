@@ -34,7 +34,21 @@ func (m *Model) toggleDock() {
 		return
 	}
 	m.docked, m.dockedTitle = s.Pane.PaneID, s.Title()
-	m.setStatus("Docked " + s.Title() + ". Your pane keys move between it and here; v sends it back.")
+	m.setStatus("Docked " + s.Title() + ". Pane keys move between it and here; V undocks from anywhere.")
+}
+
+// undockAny sends the currently docked agent back to its window from anywhere,
+// regardless of which project, panel, or session is selected.
+func (m *Model) undockAny() {
+	if m.docked == "" {
+		m.setStatus("Nothing is docked.")
+		return
+	}
+	if m.opt.Undock == nil {
+		m.setErr(fmt.Errorf("undocking an agent needs Switchboard running inside tmux"))
+		return
+	}
+	m.undock()
 }
 
 // undock sends the docked agent home, reporting whether it went.

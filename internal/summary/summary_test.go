@@ -58,6 +58,45 @@ func TestFingerprintIgnoresTimeOnly(t *testing.T) {
 	if Fingerprint(a) == Fingerprint(b) {
 		t.Fatal("a state change must trigger a rewrite")
 	}
+	c := input()
+	c.PrevPurpose = "Overarching vision for Nabu"
+	if Fingerprint(a) != Fingerprint(c) {
+		t.Fatal("PrevPurpose must not change the fingerprint")
+	}
+}
+
+func TestPromptAndPurposePreservation(t *testing.T) {
+	in := input()
+	in.Project = "Harness Development"
+	in.Threads = []string{"Training", "Serving"}
+	in.PrevPurpose = "Build security finding harnesses and evaluation suites."
+	in.Sessions[0].Thread = "Training"
+	in.Sessions[0].Arc = []string{"Planning pipeline", "Wave 8 scaling"}
+	in.Sessions[1].Thread = "Serving"
+	in.Sessions[1].FirstAsk = "Set up GPU inference endpoint"
+	p := Prompt(in, t0)
+	for _, want := range []string{
+		"THREADS: Training, Serving",
+		"PREVIOUSLY INFERRED PURPOSE: Build security finding harnesses and evaluation suites.",
+		`S1: "thinker" (thread: Training, copilot)`,
+		"history: Planning pipeline -> Wave 8 scaling",
+		`S2: "gpu" (thread: Serving, claude)`,
+		"started with: Set up GPU inference endpoint",
+	} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, p)
+		}
+	}
+
+	// Tautological purpose equal to the project name falls back to PrevPurpose.
+	out := `{"headline":"Both threads active","now":"Training and serving are advancing.","purpose":"Harness Development.","sessions":{"S1":"Scaling"}}`
+	s, err := Parse(out, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Purpose != in.PrevPurpose {
+		t.Fatalf("Purpose = %q, want fallback %q", s.Purpose, in.PrevPurpose)
+	}
 }
 
 func TestPromptLabelsSessions(t *testing.T) {

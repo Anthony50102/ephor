@@ -90,43 +90,56 @@ func (m Model) cardIndex(cs []cardRef) int {
 	return -1
 }
 
-// moveCard highlights the card dir steps away and scrolls it into view.
+// moveCard highlights the card delta steps away and scrolls it into view.
 // With nothing highlighted it starts from the first card on screen.
-func (m *Model) moveCard(dir int) {
+func (m *Model) moveCard(delta int) {
 	l := m.layout()
 	pg := m.centerPage(l)
 	if len(pg.cards) == 0 {
-		m.scrollCenter(dir)
+		m.scrollCenter(delta)
 		return
 	}
 	i := m.cardIndex(pg.cards)
-	switch {
-	case i >= 0:
-		i = max(0, min(len(pg.cards)-1, i+dir))
-	case dir == 2: // last
-		i = len(pg.cards) - 1
-	default:
+	if i >= 0 {
+		i = max(0, min(len(pg.cards)-1, i+delta))
+	} else {
 		off := clampOff(m.centerOff, len(pg.lines), l.bodyH)
-		i = len(pg.cards) - 1
+		base := len(pg.cards) - 1
 		for j, c := range pg.cards {
 			if c.start >= off {
-				i = j
+				base = j
 				break
 			}
 		}
+		i = max(0, min(len(pg.cards)-1, base+delta))
 	}
 	m.highlight(pg.cards[i])
+}
+
+// selectCard highlights card idx (clamped) in the middle pane.
+func (m *Model) selectCard(idx int) {
+	l := m.layout()
+	pg := m.centerPage(l)
+	if len(pg.cards) == 0 {
+		return
+	}
+	m.highlight(pg.cards[max(0, min(len(pg.cards)-1, idx))])
 }
 
 func (m *Model) firstCard() {
 	m.cardID = ""
 	m.centerOff = 0
-	m.moveCard(0)
+	m.selectCard(0)
 }
 
 func (m *Model) lastCard() {
-	m.cardID = ""
-	m.moveCard(2)
+	l := m.layout()
+	pg := m.centerPage(l)
+	if len(pg.cards) == 0 {
+		m.scrollCenter(1 << 20)
+		return
+	}
+	m.highlight(pg.cards[len(pg.cards)-1])
 }
 
 // highlight selects a card, selects its session, and scrolls it into view.

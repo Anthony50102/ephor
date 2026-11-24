@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -213,5 +214,52 @@ func TestClaudeStopSequenceEndsTurn(t *testing.T) {
 	info, err := c.Read(cp)
 	if err != nil || info.State != Ready {
 		t.Fatalf("state = %v, err = %v; want ready", info.State, err)
+	}
+}
+
+func TestCopilotCheckpointArcAndFirstAsk(t *testing.T) {
+	dir := t.TempDir()
+	sid := "s-arc"
+	sdir := filepath.Join(dir, sid)
+	_ = os.MkdirAll(filepath.Join(sdir, "checkpoints"), 0o755)
+	var ev strings.Builder
+	for i := 1; i <= 6; i++ {
+		ev.WriteString(`{"type":"user.message","timestamp":"2026-11-20T10:0` + string(rune('0'+i)) + `:00Z","data":{"content":"ask number ` + string(rune('0'+i)) + `"}}` + "\n")
+	}
+	_ = os.WriteFile(filepath.Join(sdir, "events.jsonl"), []byte(ev.String()), 0o644)
+
+	c := &Copilot{Dir: dir}
+	// Without checkpoints, FirstAsk captures the opening prompt that fell off maxAsks.
+	info, err := c.Read(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.FirstAsk != "ask number 1" {
+		t.Fatalf("FirstAsk = %q, want %q", info.FirstAsk, "ask number 1")
+	}
+	if len(info.Arc) != 0 {
+		t.Fatalf("expected no Arc yet, got %v", info.Arc)
+	}
+
+	// Adding checkpoints/index.md invalidates the cache and samples the full arc.
+	var idx strings.Builder
+	idx.WriteString("# Checkpoints\n\n| # | Title | File |\n|---|-------|------|\n")
+	for i := 1; i <= 12; i++ {
+		idx.WriteString("| " + strconv.Itoa(i) + " | Milestone " + strconv.Itoa(i) + " | m.md |\n")
+	}
+	_ = os.WriteFile(filepath.Join(sdir, "checkpoints", "index.md"), []byte(idx.String()), 0o644)
+
+	info, err = c.Read(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Arc) != maxArc {
+		t.Fatalf("Arc len = %d, want %d (%v)", len(info.Arc), maxArc, info.Arc)
+	}
+	if info.Arc[0] != "Milestone 1" || info.Arc[len(info.Arc)-1] != "Milestone 12" {
+		t.Fatalf("Arc endpoints = %v", info.Arc)
+	}
+	if info.FirstAsk != "" {
+		t.Fatalf("FirstAsk should be omitted when Arc is present, got %q", info.FirstAsk)
 	}
 }

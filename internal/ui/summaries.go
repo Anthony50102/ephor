@@ -55,12 +55,25 @@ func (m Model) summaryInput(pid string) summary.Input {
 	now := m.opt.Now()
 	p := m.st.Project(pid)
 	in := summary.Input{Project: p.Name, Purpose: p.Purpose}
+	for _, t := range p.Threads {
+		in.Threads = append(in.Threads, t.Name)
+	}
+	if p.Purpose == "" && m.sums != nil {
+		in.PrevPurpose = m.sums.Projects[pid].Purpose
+	}
 	ss := m.sessionsIn(sideItem{kind: sideProject, pid: pid})
 	core.SortSessions(ss, now)
 	for _, s := range ss {
+		var thread string
+		if a, ok := m.st.Assign[s.Key]; ok && a.Thread != "" {
+			if t := p.Thread(a.Thread); t != nil {
+				thread = t.Name
+			}
+		}
 		si := summary.SessionInput{
-			Key: s.Key, Title: s.Title(), Kind: s.Kind, State: stateName(s.State(now)),
-			Reason: s.Info.Reason, Branch: s.Info.Branch, Updated: s.Info.UpdatedAt, Said: s.Info.Said,
+			Key: s.Key, Title: s.Title(), Thread: thread, Kind: s.Kind, State: stateName(s.State(now)),
+			Reason: s.Info.Reason, Branch: s.Info.Branch, Updated: s.Info.UpdatedAt,
+			Arc: s.Info.Arc, FirstAsk: s.Info.FirstAsk, Said: s.Info.Said,
 		}
 		for _, a := range s.Info.Asks {
 			si.Asks = append(si.Asks, a.Text)
@@ -184,7 +197,7 @@ func (m *Model) forceSummary() tea.Cmd {
 
 // SummaryInput builds what the model would see for one project, for the
 // summarize command.
-func SummaryInput(st *store.State, ss []core.Session, pid string, now time.Time, res map[string][]cloud.Resource, live map[string]cloud.Live) summary.Input {
-	m := Model{opt: Options{Now: func() time.Time { return now }}, st: st, sessions: ss, cloudRes: res, cloudLive: live}
+func SummaryInput(st *store.State, sums *summary.Cache, ss []core.Session, pid string, now time.Time, res map[string][]cloud.Resource, live map[string]cloud.Live) summary.Input {
+	m := Model{opt: Options{Now: func() time.Time { return now }}, st: st, sums: sums, sessions: ss, cloudRes: res, cloudLive: live}
 	return m.summaryInput(pid)
 }

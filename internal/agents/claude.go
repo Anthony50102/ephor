@@ -118,6 +118,9 @@ func (c *Claude) Read(p ClaudeProc) (Info, error) {
 
 	info.UpdatedAt = st.ModTime()
 	readClaudeTranscript(path, &info)
+	if len(info.Arc) == 0 {
+		info.FirstAsk = firstClaudeAsk(path, info.Asks)
+	}
 
 	c.mu.Lock()
 	if c.cache == nil {
@@ -168,8 +171,11 @@ func readClaudeTranscript(path string, info *Info) {
 				info.Name = e.CustomTitle
 			}
 		case "summary":
-			if info.Name == "" {
-				info.Name = oneLine(e.Summary, 60)
+			if t := oneLine(e.Summary, 100); t != "" {
+				if info.Name == "" {
+					info.Name = oneLine(e.Summary, 60)
+				}
+				info.Arc = append([]string{t}, info.Arc...)
 			}
 		case "last-prompt":
 			if !lastPrompt && len(info.Asks) == 0 && strings.TrimSpace(e.LastPrompt) != "" {
@@ -219,4 +225,32 @@ func readClaudeTranscript(path string, info *Info) {
 		}
 		return !(decided && len(info.Asks) >= maxAsks && info.Said != "" && len(info.Results) >= maxResults)
 	})
+	info.Arc = sampleArc(info.Arc, maxArc)
+}
+
+func firstClaudeAsk(path string, recent []Result) string {
+	var first string
+	_ = scanForward(path, maxHeadBytes, func(line []byte) bool {
+		var e claudeEntry
+		if json.Unmarshal(line, &e) != nil || e.IsSidechain || e.Type != "user" || e.IsMeta {
+			return true
+		}
+		var s string
+		if json.Unmarshal(e.Message.Content, &s) == nil && !strings.HasPrefix(s, "<") {
+			if t := oneLine(s, 400); t != "" {
+				first = t
+				return false
+			}
+		}
+		return true
+	})
+	if first == "" {
+		return ""
+	}
+	for _, a := range recent {
+		if a.Text == first {
+			return ""
+		}
+	}
+	return first
 }

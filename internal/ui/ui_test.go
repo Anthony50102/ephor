@@ -971,3 +971,124 @@ func TestParkAgents(t *testing.T) {
 		t.Fatalf(":park-all log = %q", strings.Join(log, "|"))
 	}
 }
+
+func TestUndockFromAnywhere(t *testing.T) {
+	a := session("a", "alpha", agents.Working, time.Minute, 1)
+	b := session("b", "beta", agents.Working, 2*time.Minute, 2)
+	h := newHarness(t, []core.Session{a, b}, true)
+	h.seedProject("one", "a", now)
+	h.seedProject("two", "b", now)
+	var log []string
+	h.m.opt.Dock = func(id string) error { log = append(log, "dock "+id); return nil }
+	h.m.opt.Undock = func(id string) error { log = append(log, "undock "+id); return nil }
+
+	// Dock alpha inside project "one", then browse away to project "two" and
+	// focus the sidebar: V should still undock alpha directly.
+	h.keys("L")
+	h.m.focus = focusSessions
+	h.keys("v")
+	if h.m.Docked() != "%a" {
+		t.Fatalf("expected alpha docked, got %q", h.m.Docked())
+	}
+	h.keys("L") // switch to project "two" where beta is selected
+	h.mustSee("V undock alpha", "v dock this instead")
+	h.m.focus = focusSide
+	h.keys("V")
+	if h.m.Docked() != "" {
+		t.Fatalf("V from sidebar should undock alpha, got %q", h.m.Docked())
+	}
+	if strings.Join(log, "|") != "dock %a|undock %a" {
+		t.Fatalf("log = %q", strings.Join(log, "|"))
+	}
+
+	// V when nothing is docked gives a friendly status, and :undock also works.
+	h.keys("V")
+	h.mustSee("Nothing is docked.")
+	h.m.focus = focusSessions
+	h.keys("v")
+	h.keys(":")
+	h.typeText("undock")
+	h.keys("enter")
+	if h.m.Docked() != "" {
+		t.Fatalf(":undock should clear docked session, got %q", h.m.Docked())
+	}
+}
+
+func TestVimCounts(t *testing.T) {
+	var ss []core.Session
+	for i := range 15 {
+		ss = append(ss, session(fmt.Sprintf("s%02d", i), fmt.Sprintf("sess-%02d", i), agents.Working, time.Duration(i+1)*time.Minute, i+1))
+	}
+	h := newHarness(t, ss, true)
+	for i := range 6 {
+		h.seedProject(fmt.Sprintf("proj-%d", i+1), fmt.Sprintf("s%02d", i), now)
+	}
+
+	// Sessions list: 10j jumps 10 items, 4k jumps back 4, 3G jumps to 3rd item (idx 2).
+	h.m.focus = focusSessions
+	h.keys("1", "0", "j")
+	if h.m.sessIdx != 10 {
+		t.Fatalf("10j sessIdx = %d, want 10", h.m.sessIdx)
+	}
+	h.keys("4", "k")
+	if h.m.sessIdx != 6 {
+		t.Fatalf("4k sessIdx = %d, want 6", h.m.sessIdx)
+	}
+	h.keys("3", "G")
+	if h.m.sessIdx != 2 {
+		t.Fatalf("3G sessIdx = %d, want 2", h.m.sessIdx)
+	}
+	h.keys("5", "g", "g")
+	if h.m.sessIdx != 4 {
+		t.Fatalf("5gg sessIdx = %d, want 4", h.m.sessIdx)
+	}
+
+	// Esc cancels a typed count without clearing an active filter.
+	h.m.filter = "sess"
+	h.keys("7")
+	h.mustSee("7")
+	h.keys("esc")
+	if h.m.count != 0 || h.m.filter != "sess" {
+		t.Fatalf("esc should cancel count only: count=%d filter=%q", h.m.count, h.m.filter)
+	}
+	h.m.filter = ""
+
+	// Sidebar & project stepping: 3j jumps 3 sidebar rows, 2L steps 2 projects.
+	h.m.focus = focusSide
+	h.keys("g", "g")
+	h.keys("3", "j")
+	if h.m.sideIdx != 3 {
+		t.Fatalf("3j sideIdx = %d, want 3", h.m.sideIdx)
+	}
+	h.keys("2", "L")
+	if h.m.sideIdx != 5 {
+		t.Fatalf("2L sideIdx = %d, want 5", h.m.sideIdx)
+	}
+
+	// Center cards on Overview: 3j jumps 3 project cards, 2G jumps to 2nd card.
+	h.keys("g", "g") // Overview
+	h.m.focus = focusCenter
+	h.m.firstCard()
+	pg := h.m.centerPage(h.m.layout())
+	h.keys("3", "j")
+	if got := h.m.cardIndex(pg.cards); got != 3 {
+		t.Fatalf("3j card index = %d, want 3", got)
+	}
+	h.keys("2", "G")
+	if got := h.m.cardIndex(pg.cards); got != 1 {
+		t.Fatalf("2G card index = %d, want 1", got)
+	}
+
+	// Organize mode supports count prefixes too.
+	h.m.focus = focusSessions
+	h.keys("m")
+	h.keys("4", "j")
+	if h.m.orgIdx != 4 {
+		t.Fatalf("organize 4j orgIdx = %d, want 4", h.m.orgIdx)
+	}
+	h.keys("2", "k")
+	if h.m.orgIdx != 2 {
+		t.Fatalf("organize 2k orgIdx = %d, want 2", h.m.orgIdx)
+	}
+	h.keys("esc")
+}

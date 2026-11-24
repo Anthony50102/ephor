@@ -300,21 +300,33 @@ func (m Model) viewFooter(w int) string {
 		keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"v", "dock"}, {"i", "answer"}, {"m", "move"}, {"a", "accept"}, {"/", "filter"}, {"h", "brief"}}
 	}
 	if m.docked != "" && m.mode != modeOrganize {
-		label := "send back " + m.dockedTitle
+		var lead [][2]string
 		if sel, ok := m.selected(); ok && sel.Pane.PaneID != m.docked {
-			label = "dock this instead"
+			lead = [][2]string{{"V", "undock " + m.dockedTitle}, {"v", "dock this instead"}}
+		} else {
+			lead = [][2]string{{"v", "send back " + m.dockedTitle}}
 		}
-		keys = append([][2]string{{"v", label}}, keys...)
-		for i, k := range keys[1:] {
-			if k[0] == "v" {
-				keys = append(keys[:i+1], keys[i+2:]...)
-				break
+		var rest [][2]string
+		for _, k := range keys {
+			if k[0] != "v" && k[0] != "V" {
+				rest = append(rest, k)
 			}
 		}
+		keys = append(lead, rest...)
 	}
 	right := ""
+	if m.count > 0 || (m.pending != "" && m.pending != " ") {
+		cmd := ""
+		if m.count > 0 {
+			cmd = fmt.Sprintf("%d", m.count)
+		}
+		if m.pending != "" && m.pending != " " {
+			cmd += m.pending
+		}
+		right += sBlue.Render(cmd) + "  "
+	}
 	if m.filter != "" {
-		right = sSubtle.Render("filter /") + sMagenta.Render(m.filter) + sSubtle.Render(" · esc  ")
+		right += sSubtle.Render("filter /") + sMagenta.Render(m.filter) + sSubtle.Render(" · esc  ")
 	}
 	if m.mode != modeOrganize {
 		right += sKey.Render("space") + " " + sMuted.Render("menu")
@@ -667,10 +679,10 @@ func (m Model) viewOverview(w int) page {
 		hasPurpose := false
 		switch {
 		case c.p.Purpose != "":
-			body = append(body, clamp(wrap(sMuted.Render(c.p.Purpose), in), 1, in)...)
+			body = append(body, clamp(wrap(sMuted.Render(c.p.Purpose), in), 2, in)...)
 			hasPurpose = true
 		case hasSum && sum.Purpose != "":
-			body = append(body, clamp(wrap(sMuted.Render(sum.Purpose), in), 1, in)...)
+			body = append(body, clamp(wrap(sMuted.Render(sum.Purpose), in), 2, in)...)
 			hasPurpose = true
 		}
 		if hasSum && c.r.Total > 0 {
@@ -1409,10 +1421,10 @@ func (m Model) viewHelp(w int) []string {
 		title string
 		keys  [][2]string
 	}{
-		{"MOVE", [][2]string{{"j / k", "down / up in the focused list"}, {"h / l", "move between panels (also tab)"}, {"ctrl-h/j/k/l", "panels, then the tmux pane past the edge"}, {"j / k (middle)", "step through cards; enter opens or expands, esc collapses"}, {"space e / l / z", "toggle projects panel / sessions panel / both"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"gg / G", "top / bottom"}, {"ctrl-d / ctrl-u", "scroll the middle pane (ctrl-e / ctrl-y a line, or the wheel)"}}},
-		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"i", "type to the session without leaving"}, {"v", "dock the session's real terminal beside Switchboard; v again sends it back"}, {"p / P", "park this session / all agent windows in the background agents session"}, {"o", "start Copilot in this project or thread (opens in agents)"}, {"y", "copy how to reach the highlighted machine or cluster"}, {"s", "open a shell on it in a new tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
+		{"MOVE", [][2]string{{"j / k", "down / up (supports counts, e.g. 10j, 5k)"}, {"gg / G", "top / bottom, or {count}G to jump to item N"}, {"h / l", "move between panels (also tab)"}, {"ctrl-h/j/k/l", "panels, then the tmux pane past the edge"}, {"j / k (middle)", "step through cards; enter opens or expands, esc collapses"}, {"space e / l / z", "toggle projects panel / sessions panel / both"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"ctrl-d / ctrl-u", "scroll the middle pane (ctrl-e / ctrl-y a line, supports count)"}}},
+		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"i", "type to the session without leaving"}, {"v / V", "dock the session's terminal beside Switchboard / undock from anywhere"}, {"p / P", "park this session / all agent windows in the background agents session"}, {"o", "start Copilot in this project or thread (opens in agents)"}, {"y", "copy how to reach the highlighted machine or cluster"}, {"s", "open a shell on it in a new tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
 		{"PROJECTS", [][2]string{{"n", "new project"}, {"t", "new thread in this project"}, {"e", "describe what the project is for"}, {"r", "rename project or thread"}, {"d", "delete project or thread"}}},
-		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":park / :park-all", "move one / all agent windows to the agents tmux session"}, {":help", "this screen"}}},
+		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":undock", "send the docked session back to its window"}, {":park / :park-all", "move one / all agent windows to the agents tmux session"}, {":help", "this screen"}}},
 		{"COLORS", [][2]string{{sAmber.Render("●"), "needs you: a question or approval is waiting"}, {sGreen.Render("●"), "working"}, {sCyan.Render("✓"), "finished and ready for your next instruction"}, {sSubtle.Render("○"), "quiet: nothing new in a day"}, {sNewTag.Render("new"), "finished since you last opened the project"}}},
 	}
 	lines := []string{"", sKicker.Render("HELP"), sTitle.Render("Keys"), ""}

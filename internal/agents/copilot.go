@@ -23,6 +23,7 @@ type copilotCache struct {
 	size    int64
 	mod     time.Time
 	wsMod   time.Time
+	ckMod   time.Time
 	content Info
 }
 
@@ -56,16 +57,20 @@ func (c *Copilot) Read(id string) (Info, error) {
 	dir := filepath.Join(c.Dir, id)
 	events := filepath.Join(dir, "events.jsonl")
 	ws := filepath.Join(dir, "workspace.yaml")
+	ck := filepath.Join(dir, "checkpoints", "index.md")
 	var size int64
-	var mod, wsMod time.Time
+	var mod, wsMod, ckMod time.Time
 	if st, err := os.Stat(events); err == nil {
 		size, mod = st.Size(), st.ModTime()
 	}
 	if st, err := os.Stat(ws); err == nil {
 		wsMod = st.ModTime()
 	}
+	if st, err := os.Stat(ck); err == nil {
+		ckMod = st.ModTime()
+	}
 	c.mu.Lock()
-	if hit, ok := c.cache[id]; ok && hit.size == size && hit.mod.Equal(mod) && hit.wsMod.Equal(wsMod) {
+	if hit, ok := c.cache[id]; ok && hit.size == size && hit.mod.Equal(mod) && hit.wsMod.Equal(wsMod) && hit.ckMod.Equal(ckMod) {
 		c.mu.Unlock()
 		return hit.content, nil
 	}
@@ -80,9 +85,13 @@ func (c *Copilot) Read(id string) (Info, error) {
 	if t, err := time.Parse(time.RFC3339, meta["updated_at"]); err == nil {
 		info.UpdatedAt = t
 	}
+	info.Arc = readCheckpointArc(ck)
 	if size > 0 {
 		if err := readCopilotEvents(events, &info); err != nil {
 			return info, err
+		}
+		if len(info.Arc) == 0 {
+			info.FirstAsk = firstCopilotAsk(events, info.Asks)
 		}
 	}
 
@@ -90,7 +99,7 @@ func (c *Copilot) Read(id string) (Info, error) {
 	if c.cache == nil {
 		c.cache = map[string]copilotCache{}
 	}
-	c.cache[id] = copilotCache{size: size, mod: mod, wsMod: wsMod, content: info}
+	c.cache[id] = copilotCache{size: size, mod: mod, wsMod: wsMod, ckMod: ckMod, content: info}
 	c.mu.Unlock()
 	return info, nil
 }
@@ -223,6 +232,64 @@ func noteTime(line []byte, info *Info) {
 	if json.Unmarshal(line, &e) == nil && e.Timestamp.After(info.UpdatedAt) {
 		info.UpdatedAt = e.Timestamp
 	}
+}
+
+// readCheckpointArc parses Copilot CLI's checkpoints/index.md table and returns
+// a sampled chronological slice of milestone titles.
+func readCheckpointArc(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var titles []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.HasPrefix(line, "|") {
+			continue
+		}
+		cols := strings.Split(line, "|")
+		if len(cols) < 4 {
+			continue
+		}
+		if _, err := strconv.Atoi(strings.TrimSpace(cols[1])); err != nil {
+			continue
+		}
+		if title := oneLine(cols[2], 100); title != "" {
+			titles = append(titles, title)
+		}
+	}
+	return sampleArc(titles, maxArc)
+}
+
+// firstCopilotAsk grabs the session's opening user prompt when it is older than
+// the recent asks captured from the tail of events.jsonl.
+func firstCopilotAsk(path string, recent []Result) string {
+	var first string
+	_ = scanForward(path, maxHeadBytes, func(line []byte) bool {
+		if eventType(line) != "user.message" {
+			return true
+		}
+		var e copilotEvent
+		if json.Unmarshal(line, &e) != nil || e.AgentID != "" {
+			return true
+		}
+		if s := oneLine(e.Data.Content, 400); s != "" {
+			first = s
+			return false
+		}
+		return true
+	})
+	if first == "" {
+		return ""
+	}
+	for _, a := range recent {
+		if a.Text == first {
+			return ""
+		}
+	}
+	return first
 }
 
 // readYAMLish reads flat `key: value` lines, which is all workspace.yaml uses.

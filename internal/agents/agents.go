@@ -59,6 +59,8 @@ type Info struct {
 	AskAt     time.Time
 	Results   []Result // newest first
 	Asks      []Result // recent instructions from the user, newest first
+	FirstAsk  string   // opening user prompt when the session has no milestone arc
+	Arc       []string // chronological milestone titles across the session's life
 	Said      string   // the agent's latest reply, for summaries
 	SaidAt    time.Time
 	UpdatedAt time.Time
@@ -68,13 +70,74 @@ type Info struct {
 const (
 	maxResults   = 5
 	maxAsks      = 4
+	maxArc       = 8
 	maxSaid      = 1200
 	maxScanBytes = 24 << 20
+	maxHeadBytes = 128 << 10
 	maxLineBytes = 16 << 20
 )
 
 // chunkSize is a variable so tests can exercise lines that span chunks.
 var chunkSize = 1 << 20
+
+// scanForward calls fn for each complete line from the start of path, stopping
+// when fn returns false or limit bytes have been read.
+func scanForward(path string, limit int64, fn func(line []byte) bool) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	buf := make([]byte, limit)
+	n, err := f.Read(buf)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	data := buf[:n]
+	for len(data) > 0 {
+		i := bytes.IndexByte(data, '\n')
+		if i < 0 {
+			if int64(n) < limit {
+				fn(data)
+			}
+			break
+		}
+		if !fn(data[:i]) {
+			break
+		}
+		data = data[i+1:]
+	}
+	return nil
+}
+
+// sampleArc reduces a long chronological list of milestones to at most limit
+// items while preserving the beginning, middle progression, and latest entries.
+func sampleArc(titles []string, limit int) []string {
+	if len(titles) <= limit || limit < 3 {
+		return titles
+	}
+	out := make([]string, 0, limit)
+	seen := map[int]bool{}
+	add := func(i int) {
+		if i >= 0 && i < len(titles) && !seen[i] {
+			seen[i] = true
+			out = append(out, titles[i])
+		}
+	}
+	// Keep the first 2 milestones and last 3, then fill evenly across the middle.
+	n := len(titles)
+	add(0)
+	add(1)
+	midSlots := limit - 5
+	for k := 1; k <= midSlots; k++ {
+		idx := 1 + k*(n-4)/(midSlots+1)
+		add(idx)
+	}
+	for i := n - 3; i < n; i++ {
+		add(i)
+	}
+	return out
+}
 
 // scanBackward calls fn for each complete line of path, newest first, until fn
 // returns false or limit bytes have been read.

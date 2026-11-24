@@ -115,7 +115,7 @@ Flags:
 		if dry {
 			args = args[1:]
 		}
-		if err := summarize(src, st, run, check, filepath.Join(dir, "cloud.json"), strings.Join(args, " "), dry); err != nil {
+		if err := summarize(src, st, run, check, filepath.Join(dir, "cloud.json"), filepath.Join(dir, "summaries.json"), strings.Join(args, " "), dry); err != nil {
 			fail(err)
 		}
 	default:
@@ -213,7 +213,7 @@ func pickSummarizer(name, model, dir string) (summary.Runner, error) {
 	return summary.Shell(name, dir), nil
 }
 
-func summarize(src core.Sources, st *store.State, run summary.Runner, check cloud.Checker, cloudPath, name string, dry bool) error {
+func summarize(src core.Sources, st *store.State, run summary.Runner, check cloud.Checker, cloudPath, summaryPath, name string, dry bool) error {
 	var pid string
 	for _, p := range st.Projects {
 		if strings.EqualFold(p.Name, name) {
@@ -229,7 +229,8 @@ func summarize(src core.Sources, st *store.State, run summary.Runner, check clou
 	}
 	now := time.Now()
 	res := scanCloud(cloudPath, ss)
-	in := ui.SummaryInput(st, ss, pid, now, res, checkLive(check, res))
+	sums := summary.LoadCache(summaryPath)
+	in := ui.SummaryInput(st, sums, ss, pid, now, res, checkLive(check, res))
 	prompt := summary.Prompt(in, now)
 	if dry {
 		fmt.Print(prompt)

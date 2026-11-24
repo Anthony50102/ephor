@@ -21,24 +21,29 @@ import (
 
 // Input is everything the model sees about one project.
 type Input struct {
-	Project  string
-	Purpose  string
-	Sessions []SessionInput
-	Cloud    []string // resources the sessions' commands named, most recent first
+	Project     string
+	Purpose     string
+	PrevPurpose string   // previously inferred purpose, when Purpose is empty
+	Threads     []string // named threads in the project
+	Sessions    []SessionInput
+	Cloud       []string // resources the sessions' commands named, most recent first
 }
 
 // SessionInput describes one agent session.
 type SessionInput struct {
-	Key     string
-	Title   string
-	Kind    string
-	State   string
-	Reason  string
-	Branch  string
-	Updated time.Time
-	Asks    []string // newest first
-	Results []string // newest first
-	Said    string
+	Key      string
+	Title    string
+	Thread   string
+	Kind     string
+	State    string
+	Reason   string
+	Branch   string
+	Updated  time.Time
+	Arc      []string // chronological milestone titles across the session's life
+	FirstAsk string   // opening prompt when no milestone arc exists
+	Asks     []string // newest first
+	Results  []string // newest first
+	Said     string
 }
 
 // Summary is one generated note.
@@ -59,10 +64,12 @@ const (
 	maxText     = 600
 )
 
-// Fingerprint changes when anything a summary depends on changes. Times are
-// left out so a session that only ages does not trigger a rewrite.
+// Fingerprint changes when anything a summary depends on changes. Times and
+// PrevPurpose are left out so aging or refining a purpose does not trigger a
+// second rewrite.
 func Fingerprint(in Input) string {
 	c := in
+	c.PrevPurpose = ""
 	c.Sessions = make([]SessionInput, len(in.Sessions))
 	for i, s := range in.Sessions {
 		s.Updated = time.Time{}
@@ -107,22 +114,27 @@ The reader knows what the project is about at a high level, like a manager, but 
 Reply with only a JSON object, no code fence:
 {"headline": "...", "now": "...", "next": "...", "purpose": "...", "sessions": {"S1": "...", "S2": "..."}}
 
-- headline: the gist in five to ten words, like a news headline, for example "Training data is ready. Config decision pending." No trailing period needed for a single phrase.
-
-- now: two or three plain sentences. Say what the work is trying to achieve right now and where it stands. If a session is waiting on the user, say that first and say what it needs. Prefer outcomes over mechanics. Avoid file names, function names, and jargon unless they are essential. Present tense. Do not use em dashes.
-- next: one short sentence on the next step, if the facts make it clear. Otherwise "".
-- purpose: if the project has no stated purpose, one sentence on what the project is for. Otherwise "".
-- In "headline", "now", "next", and "purpose", never write session labels like S1. The reader cannot see them. Describe the work instead, or name a session by its quoted title if you must.
+- purpose: if the project has no stated purpose, write one or two concrete sentences describing the overarching vision, domain, and long-term direction of the WHOLE project across ALL its threads and session histories. Name the actual subject matter (what kind of models, system, or product is being built and to what end) rather than vague boilerplate like "building training, serving, and infrastructure for X". Never narrow it to a single thread's temporary task (such as hunting for a GPU instance, debugging one service, or landing a PR), and never just repeat the project name. If a PREVIOUSLY INFERRED PURPOSE is given, keep its breadth when it is already specific and accurate, or replace it with a richer, more concrete vision when the threads and histories show what the project is actually building. If the project already has a STATED PURPOSE, return "".
+- headline: a high-level status headline in six to twelve words covering the WHOLE project across its active threads, not just whichever single session moved most recently. Example: "SFT pipeline scaling; infra PR ready; serving hunting capacity" (no trailing period needed for a single phrase).
+- now: two or three plain sentences synthesizing where the WHOLE project stands across its threads and what it is pushing toward. Do not let one thread's recent troubleshooting hijack the whole summary. If a session is waiting on the user, mention that clearly without reducing the project to just that blocker. Prefer outcomes and direction over mechanics. Avoid file names, function names, and jargon unless essential. Present tense. Do not use em dashes.
+- next: one short sentence on the project's next meaningful step, if the facts make it clear. Otherwise "".
+- In "headline", "now", "next", and "purpose", never write session labels like S1. The reader cannot see them. Describe the work instead, or name a thread or session title if helpful.
 - sessions: for every session label, at most twelve words on what it is doing or just finished.
 - Mention cloud resources only when they explain what is happening, for example a training job on a cluster or a VM that was just created.
 - Use only the facts below. If they are thin, say less rather than guess.
 
 `)
 	fmt.Fprintf(&b, "PROJECT: %s\n", in.Project)
+	if len(in.Threads) > 0 {
+		fmt.Fprintf(&b, "THREADS: %s\n", strings.Join(in.Threads, ", "))
+	}
 	if in.Purpose != "" {
 		fmt.Fprintf(&b, "STATED PURPOSE: %s\n", in.Purpose)
 	} else {
 		b.WriteString("STATED PURPOSE: none\n")
+		if prev := cleanPurpose(in.PrevPurpose, in.Project); prev != "" {
+			fmt.Fprintf(&b, "PREVIOUSLY INFERRED PURPOSE: %s\n", prev)
+		}
 	}
 	if len(in.Cloud) > 0 {
 		b.WriteString("CLOUD RESOURCES (named in commands the agents ran):\n")
@@ -134,7 +146,11 @@ Reply with only a JSON object, no code fence:
 		if i == maxSessions {
 			break
 		}
-		fmt.Fprintf(&b, "\nS%d: %q (%s)\n", i+1, s.Title, s.Kind)
+		meta := s.Kind
+		if s.Thread != "" {
+			meta = "thread: " + s.Thread + ", " + meta
+		}
+		fmt.Fprintf(&b, "\nS%d: %q (%s)\n", i+1, s.Title, meta)
 		state := s.State
 		if s.Reason != "" {
 			state += ": " + s.Reason
@@ -142,6 +158,11 @@ Reply with only a JSON object, no code fence:
 		fmt.Fprintf(&b, "  state: %s, last activity %s\n", state, ago(now, s.Updated))
 		if s.Branch != "" {
 			fmt.Fprintf(&b, "  branch: %s\n", s.Branch)
+		}
+		if len(s.Arc) > 0 {
+			fmt.Fprintf(&b, "  history: %s\n", strings.Join(s.Arc, " -> "))
+		} else if s.FirstAsk != "" {
+			fmt.Fprintf(&b, "  started with: %s\n", clip(s.FirstAsk, maxText))
 		}
 		for j, a := range s.Asks {
 			label := "earlier ask"
@@ -186,7 +207,10 @@ func Parse(out string, in Input) (Summary, error) {
 	s := Summary{Headline: unlabel(tidy(raw.Headline), in), Now: unlabel(tidy(raw.Now), in),
 		Next: unlabel(tidy(raw.Next), in), Sessions: map[string]string{}}
 	if in.Purpose == "" {
-		s.Purpose = unlabel(tidy(raw.Purpose), in)
+		s.Purpose = cleanPurpose(unlabel(tidy(raw.Purpose), in), in.Project)
+		if s.Purpose == "" {
+			s.Purpose = cleanPurpose(in.PrevPurpose, in.Project)
+		}
 	}
 	for k, v := range raw.Sessions {
 		var n int
@@ -208,6 +232,22 @@ func unlabel(s string, in Input) string {
 		}
 		return m
 	})
+}
+
+// cleanPurpose drops a tautological purpose that merely repeats the project
+// name (for example "Harness Development." for project "Harness Development").
+func cleanPurpose(purpose, project string) string {
+	purpose = strings.TrimSpace(purpose)
+	if purpose == "" {
+		return ""
+	}
+	norm := func(s string) string {
+		return strings.ToLower(strings.Trim(strings.TrimSpace(s), ".!?:;\"'"))
+	}
+	if p := norm(project); p != "" && norm(purpose) == p {
+		return ""
+	}
+	return purpose
 }
 
 // tidy enforces the house style regardless of what the model did.

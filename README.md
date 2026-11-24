@@ -69,8 +69,9 @@ For real work, press `v` to dock the session: its actual tmux pane moves into
 Switchboard's window, on the right, and takes the keyboard. You are typing in
 the agent itself, with multi-line input, paste, and scrollback. Move between
 it and Switchboard with your usual tmux pane keys (`ctrl-h` / `ctrl-l` with
-vim-tmux-navigator). `v` again sends it back to its own window; `v` on another
-session swaps. Docking only moves the pane, so the agent never notices.
+vim-tmux-navigator). `V` (or `:undock`) sends the docked session back from
+anywhere in Switchboard; `v` on the same session also sends it back, and `v` on
+another session swaps. Docking only moves the pane, so the agent never notices.
 Quitting Switchboard sends a docked agent back, and if Switchboard crashes,
 the next start sends it back. Docking needs Switchboard running inside tmux.
 
@@ -80,7 +81,8 @@ session without touching your regular shells. Press `p` (or `:park`) to park
 just the selected session. If an agent is currently docked when you run `P`,
 it stays open beside Switchboard and returns to `agents` when you undock it.
 
-Keys follow LazyVim and the Snacks explorer. Press `space` for a which-key menu
+Keys follow LazyVim and the Snacks explorer, including Vim count prefixes
+(`10j`, `5k`, `5G`, `3ctrl-e`, `2L`, `2]d`). Press `space` for a which-key menu
 of actions.
 
 The screen has three panels: projects on the left, the brief in the middle,
