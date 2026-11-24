@@ -141,6 +141,7 @@ type Model struct {
 	sessIdx       int
 	selKey        string
 	centerOff     int
+	helpOff       int
 	cardID        string          // highlighted card in the middle pane
 	expanded      map[string]bool // cards opened with enter
 	hideSide      bool
@@ -597,7 +598,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case modeConfirm:
 			return m.updateConfirm(msg)
 		case modeHelp:
-			m.mode = modeNormal
+			switch msg.String() {
+			case "j", "down", "ctrl+e":
+				m.scrollHelp(1)
+			case "k", "up", "ctrl+y":
+				m.scrollHelp(-1)
+			case "ctrl+d":
+				m.scrollHelp(m.height / 2)
+			case "ctrl+u":
+				m.scrollHelp(-m.height / 2)
+			case "g", "home":
+				m.helpOff = 0
+			case "G", "end":
+				m.scrollHelp(1 << 20)
+			default:
+				m.mode = modeNormal
+			}
 			return m, nil
 		}
 		return m.updateNormal(msg)
@@ -1050,10 +1066,48 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateMouse scrolls with the wheel: the sidebar and session list move
-// their selection, the middle pane scrolls.
+// updateMouse handles the wheel and left clicks across the three panes.
 func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if msg.Action != tea.MouseActionPress || m.mode != modeNormal {
+	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+	if m.mode == modeHelp {
+		switch msg.Button {
+		case tea.MouseButtonWheelDown:
+			m.scrollHelp(3)
+		case tea.MouseButtonWheelUp:
+			m.scrollHelp(-3)
+		}
+		return m, nil
+	}
+	if m.mode != modeNormal {
+		return m, nil
+	}
+	l := m.layout()
+	if msg.Button == tea.MouseButtonLeft {
+		ry := msg.Y - 1
+		if ry < 0 || ry >= l.bodyH {
+			return m, nil
+		}
+		switch {
+		case l.sideW > 0 && msg.X < l.sideW:
+			m.focus = focusSide
+			if idx, ok := m.sideItemAt(l.sideW, l.bodyH, ry); ok {
+				m.setSide(idx)
+			}
+		case l.wide && msg.X > l.sideW+l.centerW:
+			m.focus = focusSessions
+			if idx, ok := m.sessionAt(rightW-2, l.bodyH, ry); ok {
+				m.selectSession(idx)
+			}
+		default:
+			m.focus = focusCenter
+			if c, ok := m.cardAt(l, ry); ok {
+				m.highlight(c)
+			} else {
+				m.ensureCard()
+			}
+		}
 		return m, nil
 	}
 	step := 0
@@ -1065,9 +1119,8 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
-	l := m.layout()
 	switch {
-	case msg.X < l.sideW:
+	case l.sideW > 0 && msg.X < l.sideW:
 		m.setSide(m.sideIdx + step)
 	case l.wide && msg.X > l.sideW+l.centerW:
 		m.selectSession(m.sessIdx + step)
@@ -1075,4 +1128,10 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.scrollCenter(3 * step)
 	}
 	return m, nil
+}
+
+func (m *Model) scrollHelp(n int) {
+	l := m.layout()
+	lines := m.viewHelp(l.centerW - 4)
+	m.helpOff = clampOff(clampOff(m.helpOff, len(lines), l.bodyH)+n, len(lines), l.bodyH)
 }

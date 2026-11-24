@@ -83,6 +83,58 @@ func stateWord(s agents.State) string {
 	return stateColor(s).Render(s.String())
 }
 
+// proseWidth caps multi-line natural language for comfortable reading.
+const maxProseWidth = 84
+
+func proseWidth(w int) int {
+	if w > maxProseWidth {
+		return maxProseWidth
+	}
+	return w
+}
+
+// cleanProse strips inline markdown syntax from agent text so briefs and
+// result snippets scan cleanly without losing meaning.
+func cleanProse(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return ""
+	}
+	// Strip leading markdown heading markers (e.g. "## Summary").
+	for strings.HasPrefix(s, "#") {
+		t := strings.TrimLeft(s, "#")
+		if strings.HasPrefix(t, " ") {
+			s = strings.TrimSpace(t)
+		} else {
+			break
+		}
+	}
+	// Replace markdown links [label](target) with label.
+	var out strings.Builder
+	out.Grow(len(s))
+	for i := 0; i < len(s); {
+		if s[i] == '[' {
+			if closeBr := strings.IndexByte(s[i+1:], ']'); closeBr >= 0 {
+				after := i + 1 + closeBr + 1
+				if after < len(s) && s[after] == '(' {
+					if closePar := strings.IndexByte(s[after+1:], ')'); closePar >= 0 {
+						out.WriteString(s[i+1 : i+1+closeBr])
+						i = after + 1 + closePar + 1
+						continue
+					}
+				}
+			}
+		}
+		out.WriteByte(s[i])
+		i++
+	}
+	s = out.String()
+	s = strings.ReplaceAll(s, "**", "")
+	s = strings.ReplaceAll(s, "__", "")
+	s = strings.ReplaceAll(s, "`", "")
+	return strings.TrimSpace(s)
+}
+
 // wrap word-wraps plain or styled text to w columns.
 func wrap(s string, w int) []string {
 	if w < 4 {
@@ -178,12 +230,17 @@ func paint(s string, c lipgloss.Color) string {
 // card is a raised block with a colored bar down its left edge. Content
 // lines should fit in w-4 columns.
 func card(c lipgloss.Color, w int, lines []string) []string {
-	return cardOn(c, cRaised, w, lines)
+	return cardOn(c, cRaised, false, w, lines)
 }
 
-// cardOn is a card on background bg.
-func cardOn(c, bg lipgloss.Color, w int, lines []string) []string {
-	bar := lipgloss.NewStyle().Foreground(c).Render("▌")
+// cardOn is a card on background bg. Selected cards use a thick bar; resting
+// cards use a thin bar so the eye distinguishes active focus without double bars.
+func cardOn(c, bg lipgloss.Color, selected bool, w int, lines []string) []string {
+	glyph := "│"
+	if selected {
+		glyph = "▌"
+	}
+	bar := lipgloss.NewStyle().Foreground(c).Render(glyph)
 	blank := bar + paint(strings.Repeat(" ", w-1), bg)
 	out := []string{blank}
 	for _, l := range lines {

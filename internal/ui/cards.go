@@ -140,8 +140,31 @@ func (m *Model) highlight(c cardRef) {
 	m.followCard()
 }
 
+// ensureCard highlights the first visible card if none (or a stale one) is
+// highlighted, so entering the middle pane always gives immediate feedback.
+func (m *Model) ensureCard() {
+	l := m.layout()
+	pg := m.centerPage(l)
+	if len(pg.cards) == 0 {
+		m.cardID = ""
+		return
+	}
+	if m.cardIndex(pg.cards) >= 0 {
+		return
+	}
+	off := clampOff(m.centerOff, len(pg.lines), l.bodyH)
+	i := len(pg.cards) - 1
+	for j, c := range pg.cards {
+		if c.start >= off {
+			i = j
+			break
+		}
+	}
+	m.highlight(pg.cards[i])
+}
+
 // followCard scrolls so the highlighted card is on screen, keeping its top
-// visible when it is taller than the pane.
+// visible when it is taller than the pane and clear of scroll banners.
 func (m *Model) followCard() {
 	l := m.layout()
 	pg := m.centerPage(l)
@@ -150,14 +173,32 @@ func (m *Model) followCard() {
 		return
 	}
 	c := pg.cards[i]
-	off := clampOff(m.centerOff, len(pg.lines), l.bodyH)
+	total := len(pg.lines)
+	off := clampOff(m.centerOff, total, l.bodyH)
+	// When scrolled down, row 0 shows the up-banner; when more lines sit below,
+	// the last row shows the down-banner.
+	visRows := func(o int) int {
+		r := l.bodyH
+		if o > 0 {
+			r--
+		}
+		if o+r < total {
+			r--
+		}
+		return max(1, r)
+	}
 	top := max(0, c.start-1)
 	if top < off {
 		off = top
-	} else if c.end+1 > off+l.bodyH {
-		off = min(top, c.end+1-l.bodyH)
+	} else if vr := visRows(off); c.end > off+vr {
+		// Scroll down enough to show the card's bottom, without hiding its top.
+		want := c.end - max(1, l.bodyH-2)
+		if want+l.bodyH-1 >= total {
+			want = c.end - max(1, l.bodyH-1)
+		}
+		off = min(top, want)
 	}
-	m.centerOff = clampOff(off, len(pg.lines), l.bodyH)
+	m.centerOff = clampOff(off, total, l.bodyH)
 }
 
 // enterCard opens a project or thread card, or expands any other card.
@@ -213,6 +254,9 @@ func (m *Model) fixFocus() {
 	if m.focus == focusSide && m.hideSide {
 		m.focus = focusCenter
 	}
+	if m.focus == focusCenter {
+		m.ensureCard()
+	}
 	m.followCard()
 }
 
@@ -223,6 +267,7 @@ func (m *Model) focusLeft() {
 	switch m.focus {
 	case focusSessions:
 		m.focus = focusCenter
+		m.ensureCard()
 	case focusCenter:
 		if !m.hideSide {
 			m.focus = focusSide
@@ -234,6 +279,7 @@ func (m *Model) focusRight() {
 	switch m.focus {
 	case focusSide:
 		m.focus = focusCenter
+		m.ensureCard()
 	case focusCenter:
 		m.focus = focusSessions
 	}

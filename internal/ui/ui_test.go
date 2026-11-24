@@ -856,3 +856,70 @@ func TestDockAgent(t *testing.T) {
 	h.keys("v")
 	h.mustSee("needs Switchboard running inside tmux")
 }
+
+func TestUXPolish(t *testing.T) {
+	// Markdown cleanup strips noisy tokens while keeping link labels.
+	got := cleanProse("## **Merged** `[PR #42](https://example.com/pr/42)` - check [logs](https://example.com)")
+	if strings.Contains(got, "**") || strings.Contains(got, "`") || strings.Contains(got, "https://") || strings.HasPrefix(got, "#") {
+		t.Fatalf("cleanProse left markdown noise: %q", got)
+	}
+	if !strings.Contains(got, "Merged") || !strings.Contains(got, "logs") {
+		t.Fatalf("cleanProse dropped readable text: %q", got)
+	}
+
+	// Entering center auto-highlights the first card, and the footer stays
+	// context-aware (no dead y/s hints on non-infra cards).
+	a := session("a", "alpha", agents.Working, time.Minute, 1)
+	a.Info.Ask = "Implement streaming parser"
+	h := newHarness(t, []core.Session{a}, true)
+	h.keys("l")
+	if h.m.focus != focusCenter || h.m.cardID == "" {
+		t.Fatalf("expected center focus with an active card, got focus=%d cardID=%q", h.m.focus, h.m.cardID)
+	}
+	h.mustNotSee("y copy")
+
+	// Session detail does not duplicate LAST ASKED under DOING when there is
+	// no AI summary for the session.
+	h.mustSee("LAST ASKED")
+	h.mustNotSee("DOING  summary")
+
+	// Help screen scrolls on short terminals and still closes on esc.
+	h.send(tea.WindowSizeMsg{Width: 84, Height: 16})
+	h.keys("?")
+	if h.m.mode != modeHelp {
+		t.Fatalf("expected modeHelp, got %d", h.m.mode)
+	}
+	h.mustSee("more · ctrl-d")
+	h.keys("j", "j")
+	if h.m.helpOff == 0 {
+		t.Fatal("j should scroll help on short terminals")
+	}
+	h.keys("esc")
+	if h.m.mode != modeNormal {
+		t.Fatalf("esc should close help, got %d", h.m.mode)
+	}
+
+	// Narrow/docked width uses compact sidebar legend and fits within width.
+	h.send(tea.WindowSizeMsg{Width: 84, Height: 30})
+	v := h.screen()
+	if !strings.Contains(v, "● wait   ● work") || strings.Contains(v, "creat│") {
+		t.Fatalf("expected compact narrow sidebar without mid-word clipping, got:\n%s", v)
+	}
+	for i, line := range strings.Split(v, "\n") {
+		if w := ansi.StringWidth(line); w > 84 {
+			t.Fatalf("narrow line %d width %d > 84: %q", i, w, line)
+		}
+	}
+
+	// Left-click focuses the clicked panel and selects rows.
+	h.send(tea.WindowSizeMsg{Width: 160, Height: 40})
+	h.m.focus = focusSide
+	h.send(tea.MouseMsg{X: 140, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	if h.m.focus != focusSessions {
+		t.Fatalf("left-click in right pane should focus sessions, got %d", h.m.focus)
+	}
+	h.send(tea.MouseMsg{X: 4, Y: 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	if h.m.focus != focusSide {
+		t.Fatalf("left-click in left pane should focus sidebar, got %d", h.m.focus)
+	}
+}

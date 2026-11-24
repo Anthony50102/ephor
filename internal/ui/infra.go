@@ -364,7 +364,14 @@ func (m Model) resourceDetail(r cloud.Row, w int) []string {
 		}
 	}
 	var where []string
-	if g := r.Group(); g != "" && r.Kind != "Resource group" {
+	if isCluster(r) {
+		if r.Live != nil && r.Live.Group != "" {
+			where = append(where, "group "+r.Live.Group)
+		}
+		if r.Scope != "" && (r.Live == nil || r.Scope != r.Live.Group) {
+			where = append(where, "ns "+r.Scope)
+		}
+	} else if g := r.Group(); g != "" && r.Kind != "Resource group" {
 		where = append(where, "group "+g)
 	}
 	if l := r.Live; l != nil {
@@ -557,7 +564,7 @@ func (m Model) clusterDetail(r cloud.Row, w int) []string {
 		}
 	}
 	if len(pools) == 0 && len(k.Nodes) == 0 && !have {
-		out = append(out, sSubtle.Render("Azure has not described this cluster's pools. Press enter again later, or space c."))
+		out = append(out, wrap(sSubtle.Render("Azure has not described this cluster's pools. Press enter again later, or space c."), w)...)
 	}
 	if wp := k.Waiting(); len(wp) > 0 {
 		reasons := map[string]int{}
@@ -580,9 +587,9 @@ func (m Model) clusterDetail(r cloud.Row, w int) []string {
 	a := kubeAccess(r)
 	out = append(out, "", sKicker.Render("SHELL ON A NODE"))
 	out = append(out, wrap(sCyan.Render(nodeShell(a, pickNode(k))), w)...)
-	out = append(out, sSubtle.Render("then chroot /host · ")+sKey.Render("y")+sSubtle.Render(" copies · ")+sKey.Render("s")+sSubtle.Render(" opens a window that lists nodes with this command ready to finish"))
+	out = append(out, wrap(sSubtle.Render("then chroot /host · ")+sKey.Render("y")+sSubtle.Render(" copies · ")+sKey.Render("s")+sSubtle.Render(" opens a window that lists nodes with this command ready to finish"), w)...)
 	if r.Kind == "AKS cluster" && r.Group() != "" && r.Kube == "" {
-		out = append(out, sSubtle.Render("no kubeconfig yet? ")+sCyan.Render("az aks get-credentials -g "+r.Group()+" -n "+r.Name))
+		out = append(out, wrap(sSubtle.Render("no kubeconfig yet? ")+sCyan.Render("az aks get-credentials -g "+r.Group()+" -n "+r.Name), w)...)
 	}
 	return out
 }

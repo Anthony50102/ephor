@@ -210,7 +210,7 @@ func (m Model) cloudStatus0(r cloud.Row, did string) (string, int) {
 // cloudSection renders the CLOUD block for a project brief or a session.
 // In a brief each resource is a card, and so is the line that shows the
 // rest; card ranges are relative to the returned lines.
-func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) ([]string, []cardRef) {
+func (m Model) cloudSection(ss []core.Session, w, limit int, compact bool) ([]string, []cardRef) {
 	rows, note := m.cloudRows(ss)
 	if len(rows) == 0 && note == "" {
 		return nil, nil
@@ -236,12 +236,30 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) ([]stri
 		}
 	}
 	// Everything costing money is listed, however many; the rest fills up
-	// to max.
+	// to limit.
 	var picked []cloud.Row
 	for _, r := range rows {
-		if r.Bucket() == cloud.InBilling || len(picked) < max {
+		if r.Bucket() == cloud.InBilling || len(picked) < limit {
 			picked = append(picked, r)
 		}
+	}
+	// Adapt the kind column to available width so narrow/docked panes keep
+	// room for resource names and live status.
+	narrowCloud := !compact && w < 82
+	kindW := 0
+	for _, r := range picked {
+		k := r.Kind
+		if narrowCloud {
+			k = shortKind(k)
+		}
+		if n := len([]rune(k)); n > kindW {
+			kindW = n
+		}
+	}
+	if narrowCloud {
+		kindW = min(max(kindW, 6), 10) + 2
+	} else {
+		kindW = min(max(kindW, 10), 19) + 2
 	}
 	nameW := 0
 	for _, r := range picked {
@@ -265,17 +283,33 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) ([]stri
 		if r.Gone() {
 			name = sSubtle
 		}
+		id := resCard(r)
+		sel := !compact && m.cardSel(id)
+		opened := !compact && m.open(id)
 		var left string
 		if compact {
 			k := shortKind(r.Kind)
 			left = sSubtle.Render(k+" ") + name.Render(trunc(r.Name, w-rw-len(k)-3))
 		} else {
-			kind := pad(sSubtle.Render(trunc(r.Kind, 19)), 20)
+			chev := sSubtle.Render("▸ ")
+			if opened {
+				chev = sBlue.Render("▾ ")
+			} else if sel {
+				chev = sBlue.Render("▸ ")
+			}
+			kl := r.Kind
+			if narrowCloud {
+				kl = shortKind(kl)
+			}
+			kind := chev + pad(sSubtle.Render(trunc(kl, kindW-2)), kindW)
 			where := r.Where()
-			room := w - rw - 20 - 2
+			room := w - rw - kindW - 4
 			nw := nameW
 			if nw > room {
 				nw = room
+			}
+			if sel {
+				name = sBold
 			}
 			left = kind + pad(name.Render(trunc(r.Name, nw)), nw)
 			if rest := room - nw - 2; where != "" && rest > 8 {
@@ -283,12 +317,15 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) ([]stri
 			}
 		}
 		start := len(lines)
-		lines = append(lines, spread(left, right, w))
+		rowLine := spread(left, right, w)
+		if sel {
+			rowLine = paint(pad(rowLine, w), cSelection)
+		}
+		lines = append(lines, rowLine)
 		if compact {
 			continue
 		}
-		id := resCard(r)
-		if m.open(id) {
+		if opened {
 			lines = append(lines, indent(m.resourceDetail(r, w-4), 4)...)
 			lines = append(lines, "")
 		}
@@ -303,11 +340,19 @@ func (m Model) cloudSection(ss []core.Session, w, max int, compact bool) ([]stri
 	}
 	switch {
 	case len(more) > 0:
+		moreLine := sSubtle.Render(trunc("+ "+strings.Join(more, ", "), w))
+		if !compact && m.cardSel("cloud") {
+			moreLine = paint(pad(sBlue.Render("▸ ")+sText.Render(trunc(strings.Join(more, ", "), w-2)), w), cSelection)
+		}
 		cards = append(cards, cardRef{id: "cloud", start: len(lines), end: len(lines) + 1})
-		lines = append(lines, sSubtle.Render(trunc("+ "+strings.Join(more, ", "), w)))
+		lines = append(lines, moreLine)
 	case !compact && m.open("cloud") && len(rows) > 6:
+		lessLine := sSubtle.Render("▾ show fewer")
+		if m.cardSel("cloud") {
+			lessLine = paint(pad(sBlue.Render("▾ ")+sText.Render("show fewer"), w), cSelection)
+		}
 		cards = append(cards, cardRef{id: "cloud", start: len(lines), end: len(lines) + 1})
-		lines = append(lines, sSubtle.Render("show fewer"))
+		lines = append(lines, lessLine)
 	}
 	return lines, cards
 }

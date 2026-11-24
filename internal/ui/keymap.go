@@ -152,10 +152,12 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case aHelp:
 		m.mode = modeHelp
+		m.helpOff = 0
 	case aFocusToggle:
 		switch m.focus {
 		case focusSide:
 			m.focus = focusCenter
+			m.ensureCard()
 		case focusCenter:
 			m.focus = focusSessions
 		default:
@@ -321,6 +323,7 @@ func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "h", "help":
 		m.mode = modeHelp
+		m.helpOff = 0
 	case "noh", "nohlsearch":
 		m.filter = ""
 		m.syncSelection()

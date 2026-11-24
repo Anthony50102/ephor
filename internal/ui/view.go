@@ -84,32 +84,75 @@ func (m Model) View() string {
 		margin[i] = "  "
 	}
 	if i := m.cardIndex(pg.cards); i >= 0 && m.cardSel(m.cardID) {
-		for j := pg.cards[i].start; j < pg.cards[i].end; j++ {
-			margin[j] = sBlue.Render("▌") + " "
+		// Raised cards already render their own thickened ▌ bar when selected.
+		switch m.cardID {
+		case "happening", "ov:moving", "ov:ready":
+		default:
+			for j := pg.cards[i].start; j < pg.cards[i].end; j++ {
+				margin[j] = sBlue.Render("▌") + " "
+			}
 		}
 	}
-	if m.mode == modeNormal || m.mode == modeInput || m.mode == modeConfirm {
-		off := m.centerOff
-		// In the narrow layout the session list is inside the brief, so
-		// follow the selection when the list has focus.
-		if selLine >= 0 && m.focus == focusSessions && (selLine < off || selLine >= off+bodyH-2) {
-			off = selLine - bodyH/3
+	total := len(center)
+	off := 0
+	scrollable := m.mode == modeNormal || m.mode == modeInput || m.mode == modeConfirm || m.mode == modeHelp
+	if scrollable && !m.replying() {
+		if m.mode == modeHelp {
+			off = clampOff(m.helpOff, total, bodyH)
+		} else {
+			off = m.centerOff
+			// In the narrow layout the session list is inside the brief, so
+			// follow the selection when the list has focus.
+			if selLine >= 0 && m.focus == focusSessions && (selLine < off || selLine >= off+bodyH-2) {
+				off = selLine - bodyH/3
+			}
+			off = clampOff(off, total, bodyH)
 		}
-		off = clampOff(off, len(center), bodyH)
-		total := len(center)
-		center, margin = center[off:], margin[off:]
-		// Say when there is more, on lines that are blank or about to scroll.
+		var vis []string
+		var visM []string
+		// Reserve dedicated top/bottom rows for scroll banners so content is
+		// never overwritten mid-card.
+		avail := bodyH
 		if off > 0 {
-			center[0] = spread("", sSubtle.Render(fmt.Sprintf("↑ %d more · ctrl-u", off)), centerW-4)
+			vis = append(vis, spread("", sSubtle.Render(fmt.Sprintf("↑ %d more · ctrl-u", off)), centerW-4))
+			visM = append(visM, "  ")
+			avail--
 		}
-		if below := total - off - bodyH; below > 0 {
-			center[bodyH-1] = spread("", sBlue.Render(fmt.Sprintf("↓ %d more · ctrl-d or wheel", below+1)), centerW-4)
+		hasBelow := off+avail < total
+		contentRows := avail
+		if hasBelow {
+			contentRows--
 		}
+		end := min(total, off+max(0, contentRows))
+		for i := off; i < end; i++ {
+			vis = append(vis, center[i])
+			visM = append(visM, margin[i])
+		}
+		if hasBelow {
+			below := total - end
+			vis = append(vis, spread("", sBlue.Render(fmt.Sprintf("↓ %d more · ctrl-d or wheel", below)), centerW-4))
+			visM = append(visM, "  ")
+		}
+		center, margin = vis, visM
 	}
 	for i := range center {
 		center[i] = margin[i] + center[i]
 	}
-	center = box(center, centerW, bodyH)
+	if scrollable && !m.replying() && total > bodyH {
+		center = box(center, centerW-1, bodyH)
+		thumbH := max(1, bodyH*bodyH/total)
+		maxOff := max(1, total-bodyH+1)
+		thumbTop := min(bodyH-thumbH, (off*(bodyH-thumbH))/maxOff)
+		for i := range center {
+			if i >= thumbTop && i < thumbTop+thumbH {
+				center[i] += sSubtle.Render("┃")
+			} else {
+				center[i] += " "
+			}
+		}
+	} else {
+		center = box(center, centerW, bodyH)
+	}
 	sep := paint(sLine.Render("│"), cPanel)
 	var side []string
 	if sideW > 0 {
@@ -142,6 +185,27 @@ func (m Model) View() string {
 	return paint(m.viewHeader(w), cPanel) + "\n" + strings.Join(rows, "\n") + "\n" + paint(m.viewFooter(w), cPanel)
 }
 
+// cardAt returns the card rendered at body row ry in the middle pane.
+func (m Model) cardAt(l layout, ry int) (cardRef, bool) {
+	pg := m.centerPage(l)
+	total := len(pg.lines)
+	off := clampOff(m.centerOff, total, l.bodyH)
+	contentStart := 0
+	if off > 0 {
+		if ry == 0 {
+			return cardRef{}, false
+		}
+		contentStart = 1
+	}
+	pageLine := off + (ry - contentStart)
+	for _, c := range pg.cards {
+		if pageLine >= c.start && pageLine < c.end {
+			return c, true
+		}
+	}
+	return cardRef{}, false
+}
+
 func padAll(lines []string, w int) []string {
 	out := make([]string, len(lines))
 	for i, l := range lines {
@@ -169,27 +233,36 @@ func (m Model) viewHeader(w int) string {
 	if crumb := m.crumb(); crumb != "" {
 		left += sSubtle.Render(" / ") + sBlue.Render(crumb)
 	}
+	if m.docked != "" {
+		left += "  " + sTeal.Background(cRaised).Render(" ⇄ "+trunc(m.dockedTitle, 18)+" ")
+	}
+	if !m.loaded {
+		return spread(" "+left, sSubtle.Render("looking for agents…")+" ", w)
+	}
 	var parts []string
 	if r.NeedsYou > 0 {
 		parts = append(parts, sBadge.Render(fmt.Sprintf(" %d needs you ", r.NeedsYou)))
 	}
-	parts = append(parts,
-		sGreen.Render("●")+sMuted.Render(fmt.Sprintf(" %d working", r.Working)),
-		sCyan.Render("✓")+sMuted.Render(fmt.Sprintf(" %d ready", r.Ready)),
-	)
+	if r.Working > 0 {
+		parts = append(parts, sGreen.Render("●")+sMuted.Render(fmt.Sprintf(" %d working", r.Working)))
+	} else {
+		parts = append(parts, sSubtle.Render("○ 0 working"))
+	}
+	if r.Ready > 0 {
+		parts = append(parts, sCyan.Render("✓")+sMuted.Render(fmt.Sprintf(" %d ready", r.Ready)))
+	} else {
+		parts = append(parts, sSubtle.Render("✓ 0 ready"))
+	}
 	if inbox > 0 {
 		parts = append(parts, sMagenta.Render("◇")+sMuted.Render(fmt.Sprintf(" %d unassigned", inbox)))
 	}
-	if w < 100 {
-		parts = parts[:len(parts)-1] // drop the least urgent counts on narrow screens
-		if inbox > 0 {
-			parts = parts[:len(parts)-1]
-		}
+	help := sSubtle.Render("? help")
+	// Drop least urgent pills before squeezing the breadcrumb on narrow widths.
+	leftW := lipgloss.Width(left) + 3
+	for len(parts) > 1 && leftW+lipgloss.Width(strings.Join(parts, "  ")+"  "+help)+1 > w {
+		parts = parts[:len(parts)-1]
 	}
-	right := strings.Join(parts, "  ") + "  " + sSubtle.Render("? help")
-	if !m.loaded {
-		right = sSubtle.Render("looking for agents…")
-	}
+	right := strings.Join(parts, "  ") + "  " + help
 	return spread(" "+left, right+" ", w)
 }
 
@@ -202,6 +275,8 @@ func (m Model) viewFooter(w int) string {
 		return pad(" "+sBlue.Render(m.inputPrompt()+": ")+m.input.View(), w)
 	case modeConfirm:
 		return pad(" "+sAmber.Render(m.confirmText)+"  "+sKey.Render("y")+sMuted.Render(" yes  ")+sKey.Render("any key")+sMuted.Render(" no"), w)
+	case modeHelp:
+		return pad(" "+sKey.Render("j/k")+sMuted.Render(" scroll")+sSubtle.Render("  ·  ")+sKey.Render("ctrl-d/u")+sMuted.Render(" page")+sSubtle.Render("  ·  ")+sKey.Render("esc")+sMuted.Render(" close"), w)
 	}
 	if m.loadErr != nil {
 		return pad(" "+sRed.Render("Could not read tmux: "+m.loadErr.Error()), w)
@@ -214,14 +289,15 @@ func (m Model) viewFooter(w int) string {
 		return pad(" "+st.Render(m.status), w)
 	}
 	var keys [][2]string
-	if m.mode == modeOrganize {
+	switch {
+	case m.mode == modeOrganize:
 		keys = [][2]string{{"j/k", "move"}, {"enter", "place here"}, {"t", "new thread"}, {"n", "new project"}, {"esc", "cancel"}}
-	} else if m.focus == focusSide {
-		keys = [][2]string{{"j/k", "browse"}, {"H/L", "projects"}, {"]d", "next needs you"}, {"l", "sessions"}, {"n", "new project"}, {"e", "describe"}, {"space", "menu"}}
-	} else if m.focus == focusCenter {
-		keys = [][2]string{{"j/k", "cards"}, {"enter", "open or expand"}, {"esc", "collapse"}, {"i", "answer"}, {"v", "dock"}, {"y/s", "copy / open a shell"}, {"h/l", "panels"}, {"space e/l/z", "toggle panels"}, {"space", "menu"}}
-	} else {
-		keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"v", "dock"}, {"m", "move"}, {"a", "accept"}, {"]d", "next needs you"}, {"/", "filter"}, {"h", "projects"}, {"space", "menu"}}
+	case m.focus == focusSide:
+		keys = [][2]string{{"j/k", "browse"}, {"enter/l", "brief"}, {"H/L", "projects"}, {"]d", "needs you"}, {"n", "new project"}, {"e", "describe"}}
+	case m.focus == focusCenter:
+		keys = m.centerFooterKeys()
+	default:
+		keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"v", "dock"}, {"i", "answer"}, {"m", "move"}, {"a", "accept"}, {"/", "filter"}, {"h", "brief"}}
 	}
 	if m.docked != "" && m.mode != modeOrganize {
 		label := "send back " + m.dockedTitle
@@ -236,47 +312,132 @@ func (m Model) viewFooter(w int) string {
 			}
 		}
 	}
-	var b []string
-	for _, k := range keys {
-		b = append(b, sKey.Render(k[0])+" "+sMuted.Render(k[1]))
-	}
-	line := " " + strings.Join(b, sSubtle.Render("  ·  "))
+	right := ""
 	if m.filter != "" {
-		line += sSubtle.Render("   filter: ") + sMagenta.Render(m.filter)
+		right = sSubtle.Render("filter /") + sMagenta.Render(m.filter) + sSubtle.Render(" · esc  ")
 	}
-	return pad(line, w)
+	if m.mode != modeOrganize {
+		right += sKey.Render("space") + " " + sMuted.Render("menu")
+	}
+	avail := w - 2 - lipgloss.Width(right)
+	if right != "" {
+		avail -= 2
+	}
+	sep := sSubtle.Render("  ·  ")
+	sepW := lipgloss.Width(sep)
+	var b []string
+	used := 0
+	for _, k := range keys {
+		piece := sKey.Render(k[0]) + " " + sMuted.Render(k[1])
+		pw := lipgloss.Width(piece)
+		need := pw
+		if len(b) > 0 {
+			need += sepW
+		}
+		if len(b) > 0 && used+need > avail {
+			break
+		}
+		b = append(b, piece)
+		used += need
+	}
+	left := " " + strings.Join(b, sep)
+	if right == "" {
+		return pad(left, w)
+	}
+	return spread(left, right+" ", w)
+}
+
+// centerFooterKeys picks hints relevant to the currently highlighted card.
+func (m Model) centerFooterKeys() [][2]string {
+	var keys [][2]string
+	keys = append(keys, [2]string{"j/k", "cards"})
+	switch {
+	case strings.HasPrefix(m.cardID, "proj:"), strings.HasPrefix(m.cardID, "thread:"):
+		keys = append(keys, [2]string{"enter", "open"})
+	case strings.HasPrefix(m.cardID, "res:"):
+		if m.open(m.cardID) {
+			keys = append(keys, [2]string{"esc", "collapse"})
+		} else {
+			keys = append(keys, [2]string{"enter", "expand"})
+		}
+		keys = append(keys, [2]string{"y", "copy cmd"}, [2]string{"s", "shell"})
+	case strings.HasPrefix(m.cardID, "needs:"), strings.HasPrefix(m.cardID, "sess:"):
+		if m.open(m.cardID) {
+			keys = append(keys, [2]string{"esc", "collapse"})
+		} else {
+			keys = append(keys, [2]string{"enter", "expand"})
+		}
+		keys = append(keys, [2]string{"i", "answer"}, [2]string{"v", "dock"})
+	case m.cardID == "happening":
+		if m.open(m.cardID) {
+			keys = append(keys, [2]string{"esc", "collapse"})
+		} else {
+			keys = append(keys, [2]string{"enter", "more"})
+		}
+		keys = append(keys, [2]string{"space s", "rewrite"})
+	default:
+		if m.open(m.cardID) {
+			keys = append(keys, [2]string{"esc", "collapse"})
+		} else {
+			keys = append(keys, [2]string{"enter", "expand"})
+		}
+	}
+	keys = append(keys, [2]string{"h/l", "panels"}, [2]string{"space z", "zen"})
+	return keys
 }
 
 // ---- sidebar ----
 
-func (m Model) viewSide(w, h int) []string {
+func (m Model) buildSide(w, h int) ([]string, []int) {
 	now := m.opt.Now()
 	var lines []string
+	var itemAt []int // sideIdx for each rendered line, or -1
+	push := func(line string, idx int) {
+		lines = append(lines, line)
+		itemAt = append(itemAt, idx)
+	}
+	kicker := sSubtle.Bold(true)
+	if m.focus == focusSide {
+		kicker = sBlue.Bold(true)
+	}
 	sel := 0
 	add := func(i int, glyph, label, right string) {
 		active := i == m.sideIdx
 		inner := w - 2
-		label = trunc(label, inner-3-lipgloss.Width(right))
+		gW := lipgloss.Width(glyph)
+		rW := lipgloss.Width(right)
+		maxLabel := max(4, inner-gW-1-rW)
+		if rW > 0 {
+			maxLabel = max(4, maxLabel-1)
+		}
+		label = trunc(label, maxLabel)
 		row := spread(glyph+" "+label, right, inner)
 		if active {
 			sel = len(lines)
 			bg := cRaised
+			bar := sLine.Render("│")
 			if m.focus == focusSide {
 				bg = cSelection
+				bar = sBlue.Render("▌")
 			}
-			lines = append(lines, paint(" "+pad(row, inner)+" ", bg))
+			push(paint(bar+pad(row, inner)+" ", bg), i)
 			return
 		}
-		lines = append(lines, " "+row)
+		push(" "+row, i)
 	}
-	lines = append(lines, "", " "+sKicker.Render("WORKSPACE"))
+	push("", -1)
+	push(" "+kicker.Render("WORKSPACE"), -1)
 	for i, it := range m.side {
 		switch it.kind {
 		case sideOverview:
 			r := core.Roll(m.sessions, now)
 			right := ""
 			if r.NeedsYou > 0 {
-				right = sBadge.Render(fmt.Sprintf(" %d needs you ", r.NeedsYou))
+				if w < 26 {
+					right = sBadge.Render(fmt.Sprintf(" %d ", r.NeedsYou))
+				} else {
+					right = sBadge.Render(fmt.Sprintf(" %d needs you ", r.NeedsYou))
+				}
 			}
 			add(i, sBlue.Render("≡"), sText.Render("Overview"), right)
 		case sideInbox:
@@ -289,21 +450,28 @@ func (m Model) viewSide(w, h int) []string {
 				right = sPill.Render(fmt.Sprintf(" %d ", len(ss)))
 			}
 			add(i, sMagenta.Render("◇"), sText.Render("Unassigned"), right)
-			lines = append(lines, "", " "+sKicker.Render("PROJECTS"))
+			push("", -1)
+			push(" "+kicker.Render("PROJECTS"), -1)
 			if len(m.st.Projects) == 0 {
-				lines = append(lines, " "+sSubtle.Render("none yet · n to create"))
+				if w < 25 {
+					push(" "+sSubtle.Render("none yet · n new"), -1)
+				} else {
+					push(" "+sSubtle.Render("none yet · n to create"), -1)
+				}
 			}
 		case sideProject:
 			p := m.st.Project(it.pid)
 			r := core.Roll(m.sessionsIn(it), now)
 			right := ""
-			if n := m.newCount(*p); n > 0 {
+			if r.NeedsYou > 0 {
+				right = sBadge.Render(fmt.Sprintf(" %d ", r.NeedsYou))
+			} else if n := m.newCount(*p); n > 0 {
 				right = sMagenta.Render(fmt.Sprintf("%d new", n))
 			} else if r.Total > 0 {
 				right = sSubtle.Render(fmt.Sprint(r.Total))
 			}
 			if i > 0 && m.side[i-1].kind == sideThread {
-				lines = append(lines, "") // close the previous project's thread group
+				push("", -1) // close the previous project's thread group
 			}
 			add(i, dot(r.State), sBold.Render(p.Name), right)
 		case sideThread:
@@ -314,12 +482,23 @@ func (m Model) viewSide(w, h int) []string {
 			if i == len(m.side)-1 || m.side[i+1].kind != sideThread || m.side[i+1].pid != it.pid {
 				branch = "└─"
 			}
-			add(i, sLine.Render(branch)+" "+dot(r.State), sMuted.Render(t.Name), "")
+			right := ""
+			if r.NeedsYou > 0 {
+				right = sBadge.Render(fmt.Sprintf(" %d ", r.NeedsYou))
+			} else if r.Total > 0 {
+				right = sSubtle.Render(fmt.Sprint(r.Total))
+			}
+			add(i, sLine.Render(branch)+" "+dot(r.State), sMuted.Render(t.Name), right)
 		}
 	}
-	lines = append(lines, "",
-		" "+sAmber.Render("●")+sSubtle.Render(" needs you  ")+sGreen.Render("●")+sSubtle.Render(" working"),
-		" "+sCyan.Render("✓")+sSubtle.Render(" ready      ○ quiet"))
+	push("", -1)
+	if w < 26 {
+		push(" "+sAmber.Render("●")+sSubtle.Render(" wait   ")+sGreen.Render("●")+sSubtle.Render(" work"), -1)
+		push(" "+sCyan.Render("✓")+sSubtle.Render(" ready  ○ quiet"), -1)
+	} else {
+		push(" "+sAmber.Render("●")+sSubtle.Render(" needs you  ")+sGreen.Render("●")+sSubtle.Render(" working"), -1)
+		push(" "+sCyan.Render("✓")+sSubtle.Render(" ready      ○ quiet"), -1)
+	}
 	if len(lines) > h {
 		// Keep the selected item visible on short terminals.
 		start := sel - h/2
@@ -330,8 +509,22 @@ func (m Model) viewSide(w, h int) []string {
 			start = len(lines) - h
 		}
 		lines = lines[start : start+h]
+		itemAt = itemAt[start : start+h]
 	}
+	return lines, itemAt
+}
+
+func (m Model) viewSide(w, h int) []string {
+	lines, _ := m.buildSide(w, h)
 	return lines
+}
+
+func (m Model) sideItemAt(w, h, ry int) (int, bool) {
+	_, itemAt := m.buildSide(w, h)
+	if ry < 0 || ry >= len(itemAt) || itemAt[ry] < 0 {
+		return 0, false
+	}
+	return itemAt[ry], true
 }
 
 // ---- center ----
@@ -374,7 +567,7 @@ func (m Model) viewOverview(w int) page {
 	now := m.opt.Now()
 	r := core.Roll(m.sessions, now)
 	var pg page
-	pg.add("", sSubtle.Render("Overview"), "", sBold.Render("What needs you, what is moving"), m.triage(r), "", rule(w))
+	pg.add("", sSubtle.Render("Overview"), sBold.Render("What needs you, what is moving"), m.triage(r), rule(w))
 	if r.Total == 0 {
 		pg.add("", sMuted.Render("No Copilot or Claude Code sessions found in tmux."))
 		return pg
@@ -388,40 +581,57 @@ func (m Model) viewOverview(w int) page {
 	}
 	in := w - 4
 	keep := 1
+	movingW := in - 2
 	if m.open("ov:moving") {
 		keep = 6
+		movingW = proseWidth(in - 2)
 	}
 	keepReady := 1
+	readyW := in - 2
 	if m.open("ov:ready") {
 		keepReady = 8
+		readyW = proseWidth(in - 2)
 	}
 	var moving, ready []string
 	for _, s := range sorted {
 		name := m.where(s) + sBold.Render(s.Title())
+		age := sSubtle.Render(core.Ago(s.Info.UpdatedAt, now))
 		switch s.State(now) {
 		case agents.Working:
-			moving = append(moving, name+sSubtle.Render("  "+core.Ago(s.Info.UpdatedAt, now)))
-			if d := m.doing(s); d != "" {
-				moving = append(moving, clamp(indent(wrap(sText.Render(d), in-2), 2), keep, in)...)
+			moving = append(moving, spread(name, age, in))
+			if d := cleanProse(m.doing(s)); d != "" {
+				moving = append(moving, clamp(indent(wrap(sMuted.Render(d), movingW), 2), keep, in)...)
 			}
 		case agents.Ready:
-			ready = append(ready, name+sSubtle.Render("  "+core.Ago(s.Info.UpdatedAt, now)))
+			ready = append(ready, spread(name, age, in))
 			if len(s.Info.Results) > 0 {
-				text := agents.FirstSentence(s.Info.Results[0].Text, 200)
+				text := cleanProse(agents.FirstSentence(s.Info.Results[0].Text, 240))
 				if keepReady > 1 {
-					text = strings.Join(strings.Fields(s.Info.Results[0].Text), " ")
+					text = cleanProse(s.Info.Results[0].Text)
 				}
-				ready = append(ready, clamp(indent(wrap(sText.Render(text), in-2), 2), keepReady, in)...)
+				ready = append(ready, clamp(indent(wrap(sMuted.Render(text), readyW), 2), keepReady, in)...)
 			}
 		}
 	}
 	if moving != nil {
+		cue := ""
+		if m.open("ov:moving") {
+			cue = sSubtle.Render("▾ esc collapses")
+		} else if m.cardSel("ov:moving") {
+			cue = sSubtle.Render("▸ enter expands")
+		}
 		pg.add("")
-		pg.addCard(cardRef{id: "ov:moving"}, cardOn(cGreen, m.cardBg("ov:moving"), w, append([]string{sGreen.Bold(true).Render("HAPPENING NOW"), ""}, moving...)))
+		pg.addCard(cardRef{id: "ov:moving"}, cardOn(cGreen, m.cardBg("ov:moving"), m.cardSel("ov:moving"), w, append([]string{spread(sGreen.Bold(true).Render("HAPPENING NOW"), cue, in)}, moving...)))
 	}
 	if ready != nil {
+		right := sSubtle.Render("finished in the last day")
+		if m.open("ov:ready") {
+			right = sSubtle.Render("▾ esc collapses")
+		} else if m.cardSel("ov:ready") {
+			right = sSubtle.Render("▸ enter expands")
+		}
 		pg.add("")
-		pg.addCard(cardRef{id: "ov:ready"}, cardOn(cCyan, m.cardBg("ov:ready"), w, append([]string{spread(sCyan.Bold(true).Render("READY FOR YOU"), sSubtle.Render("finished in the last day"), in), ""}, ready...)))
+		pg.addCard(cardRef{id: "ov:ready"}, cardOn(cCyan, m.cardBg("ov:ready"), m.cardSel("ov:ready"), w, append([]string{spread(sCyan.Bold(true).Render("READY FOR YOU"), right, in)}, ready...)))
 	}
 
 	type card struct {
@@ -445,7 +655,7 @@ func (m Model) viewOverview(w int) page {
 		pg.add("", sMuted.Render("No projects yet. Press ")+sKey.Render("n")+sMuted.Render(" to create one, then move sessions into it with ")+sKey.Render("m")+sMuted.Render("."))
 	}
 	for _, c := range cards {
-		head := dot(c.r.State) + " " + sMagenta.Bold(true).Render(c.p.Name)
+		head := dot(c.r.State) + " " + sBold.Render(c.p.Name)
 		meta := stateWord(c.r.State)
 		if c.r.Total > 0 {
 			meta += sSubtle.Render(" · " + plural(c.r.Total, "session") + " · " + core.Ago(c.r.UpdatedAt, now))
@@ -454,19 +664,24 @@ func (m Model) viewOverview(w int) page {
 		}
 		body := []string{spread(head, meta, in)}
 		sum, hasSum := m.summaryFor(c.p.ID)
+		hasPurpose := false
 		switch {
 		case c.p.Purpose != "":
 			body = append(body, clamp(wrap(sMuted.Render(c.p.Purpose), in), 1, in)...)
+			hasPurpose = true
 		case hasSum && sum.Purpose != "":
 			body = append(body, clamp(wrap(sMuted.Render(sum.Purpose), in), 1, in)...)
+			hasPurpose = true
 		}
 		if hasSum && c.r.Total > 0 {
 			hl := sum.Headline
 			if hl == "" {
 				hl = agents.FirstSentence(sum.Now, 200)
 			}
-			body = append(body, "")
-			body = append(body, clamp(wrap(sBold.Render(hl), in), 2, in)...)
+			if hasPurpose {
+				body = append(body, "")
+			}
+			body = append(body, clamp(wrap(sText.Render(cleanProse(hl)), in), 2, in)...)
 		}
 		if c.r.NeedsYou > 0 || !hasSum {
 			if hl := m.headline(c.s); hl != "" {
@@ -488,10 +703,20 @@ func (m Model) viewOverview(w int) page {
 }
 
 func (m Model) triage(r core.Rollup) string {
-	return sAmber.Render(fmt.Sprintf("● %d needs you", r.NeedsYou)) + "   " +
-		sGreen.Render(fmt.Sprintf("● %d working", r.Working)) + "   " +
-		sCyan.Render(fmt.Sprintf("✓ %d ready", r.Ready)) + "   " +
-		sSubtle.Render(fmt.Sprintf("○ %d quiet", r.Total-r.NeedsYou-r.Working-r.Ready))
+	needs := sSubtle.Render("○ 0 needs you")
+	if r.NeedsYou > 0 {
+		needs = sAmber.Bold(true).Render(fmt.Sprintf("● %d needs you", r.NeedsYou))
+	}
+	working := sSubtle.Render("○ 0 working")
+	if r.Working > 0 {
+		working = sGreen.Render(fmt.Sprintf("● %d working", r.Working))
+	}
+	ready := sSubtle.Render("✓ 0 ready")
+	if r.Ready > 0 {
+		ready = sCyan.Render(fmt.Sprintf("✓ %d ready", r.Ready))
+	}
+	quiet := sSubtle.Render(fmt.Sprintf("○ %d quiet", r.Total-r.NeedsYou-r.Working-r.Ready))
+	return needs + "   " + working + "   " + ready + "   " + quiet
 }
 
 // headline is the single most useful line about a group of sessions.
@@ -502,15 +727,15 @@ func (m Model) headline(ss []core.Session) string {
 	for _, s := range ss {
 		switch s.State(now) {
 		case agents.NeedsYou:
-			return sAmber.Render("Needs you: ") + sText.Render(s.Info.Reason)
+			return sAmber.Render("Needs you: ") + sText.Render(cleanProse(s.Info.Reason))
 		case agents.Working:
 			if s.Info.Ask != "" {
-				return sGreen.Render("Working on: ") + sText.Render(s.Info.Ask)
+				return sGreen.Render("Working on: ") + sText.Render(cleanProse(s.Info.Ask))
 			}
 			return sGreen.Render("Working: ") + sText.Render(s.Title())
 		case agents.Ready:
 			if len(s.Info.Results) > 0 {
-				return sCyan.Render("Finished: ") + sText.Render(agents.FirstSentence(s.Info.Results[0].Text, 200))
+				return sCyan.Render("Finished: ") + sText.Render(cleanProse(agents.FirstSentence(s.Info.Results[0].Text, 200)))
 			}
 		}
 	}
@@ -520,6 +745,7 @@ func (m Model) headline(ss []core.Session) string {
 func (m Model) needsYouBlock(w int, ss []core.Session, showPlace bool) ([]string, []cardRef) {
 	now := m.opt.Now()
 	in := w - 4
+	pw := proseWidth(in)
 	var out []string
 	var cards []cardRef
 	for _, s := range ss {
@@ -535,13 +761,18 @@ func (m Model) needsYouBlock(w int, ss []core.Session, showPlace bool) ([]string
 			trunc(name, in),
 		}
 		id := "needs:" + s.Key
+		reason := cleanProse(s.Info.Reason)
 		if m.open(id) {
-			body = append(body, wrap(sText.Render(s.Info.Reason), in)...)
+			body = append(body, wrap(sText.Render(reason), pw)...)
 			body = append(body, m.expandedSession(s, in)...)
 		} else {
-			body = append(body, clamp(wrap(sText.Render(s.Info.Reason), in), 3, in)...)
+			body = append(body, clamp(wrap(sText.Render(reason), pw), 3, in)...)
 		}
-		body = append(body, "", sKey.Render("i")+sAmber.Render(" answer it here")+sSubtle.Render("   ")+sKey.Render("]d")+sSubtle.Render(" selects it · enter more"))
+		cue := "enter more"
+		if m.open(id) {
+			cue = "esc collapses"
+		}
+		body = append(body, "", sKey.Render("i")+sAmber.Render(" answer")+sSubtle.Render("  ")+sKey.Render("v")+sMuted.Render(" dock")+sSubtle.Render("  ")+sKey.Render("]d")+sSubtle.Render(" selects it · "+cue))
 		if out != nil {
 			out = append(out, "")
 		}
@@ -622,17 +853,18 @@ func (m Model) viewProject(w int, sc sideItem) page {
 	if r.Total > 0 {
 		meta = stateWord(r.State) + sSubtle.Render(" · updated "+core.Ago(r.UpdatedAt, now))
 	}
-	lines := []string{"", sSubtle.Render(kicker), "", spread(sBold.Render(title), meta, w)}
+	lines := []string{"", sSubtle.Render(kicker), spread(sBold.Render(title), meta, w)}
 	sum, hasSum := m.summaryFor(p.ID)
+	pw := proseWidth(w)
 	switch {
 	case p.Purpose != "":
-		lines = append(lines, wrap(sMuted.Render(p.Purpose), w)...)
+		lines = append(lines, wrap(sMuted.Render(p.Purpose), pw)...)
 	case hasSum && sum.Purpose != "":
-		lines = append(lines, wrap(sSubtle.Render("Probably: ")+sMuted.Render(sum.Purpose)+sSubtle.Render("  ")+sKey.Render("e")+sSubtle.Render(" to confirm or edit"), w)...)
+		lines = append(lines, wrap(sSubtle.Render("Probably: ")+sMuted.Render(sum.Purpose)+sSubtle.Render("  ")+sKey.Render("e")+sSubtle.Render(" to confirm or edit"), pw)...)
 	default:
 		lines = append(lines, sSubtle.Render("No description yet. Press ")+sKey.Render("e")+sSubtle.Render(" to say what this project is for."))
 	}
-	lines = append(lines, "", rule(w))
+	lines = append(lines, rule(w))
 	pg := page{lines: lines}
 
 	if c := m.happeningCard(w, p.ID, ss, r); c != nil {
@@ -647,7 +879,7 @@ func (m Model) viewProject(w int, sc sideItem) page {
 
 	if hasSum && sum.Next != "" && r.Total > 0 {
 		pg.add("", sBlue.Render("→ ")+sBlue.Bold(true).Render("NEXT UP"))
-		pg.add(indent(wrap(sText.Render(sum.Next), w-2), 2)...)
+		pg.add(indent(wrap(sText.Render(cleanProse(sum.Next)), proseWidth(w-2)), 2)...)
 	}
 
 	pg.addPart(m.workInMotion(w, p, sc, ss))
@@ -678,9 +910,10 @@ func (m Model) viewProject(w int, sc sideItem) page {
 func (m Model) happeningCard(w int, pid string, ss []core.Session, r core.Rollup) []string {
 	now := m.opt.Now()
 	in := w - 4
+	pw := proseWidth(in)
 	sum, hasSum := m.summaryFor(pid)
 	head := spread(sBlue.Bold(true).Render("HAPPENING NOW"), m.summaryMeta(pid), in)
-	body := []string{head, ""}
+	body := []string{head}
 	open := m.open("happening")
 	switch {
 	case hasSum:
@@ -689,10 +922,10 @@ func (m Model) happeningCard(w int, pid string, ss []core.Session, r core.Rollup
 			hl = agents.FirstSentence(sum.Now, 200)
 			rest = strings.TrimSpace(strings.TrimPrefix(sum.Now, hl))
 		}
-		body = append(body, wrap(sBold.Render(hl), in)...)
+		body = append(body, wrap(sBold.Render(cleanProse(hl)), pw)...)
 		if rest != "" {
 			body = append(body, "")
-			body = append(body, wrap(sText.Render(rest), in)...)
+			body = append(body, wrap(sText.Render(cleanProse(rest)), pw)...)
 		}
 		if open {
 			body = append(body, "", sLine.Render(strings.Repeat("─", in)), sSubtle.Render("Sessions"))
@@ -701,9 +934,9 @@ func (m Model) happeningCard(w int, pid string, ss []core.Session, r core.Rollup
 				if st == agents.Quiet || st == agents.Ended || st == agents.Unknown {
 					continue
 				}
-				body = append(body, dot(st)+" "+sBold.Render(trunc(s.Title(), in-12))+sSubtle.Render("  "+core.Ago(s.Info.UpdatedAt, now)))
-				if d := m.status1(s); d != "" {
-					body = append(body, indent(wrap(sText.Render(d), in-2), 2)...)
+				body = append(body, spread(dot(st)+" "+sBold.Render(trunc(s.Title(), in-12)), sSubtle.Render(core.Ago(s.Info.UpdatedAt, now)), in))
+				if d := cleanProse(m.status1(s)); d != "" {
+					body = append(body, indent(wrap(sText.Render(d), proseWidth(in-2)), 2)...)
 				}
 			}
 		}
@@ -713,9 +946,9 @@ func (m Model) happeningCard(w int, pid string, ss []core.Session, r core.Rollup
 			if s.State(now) != agents.Working {
 				continue
 			}
-			moving = append(moving, sGreen.Render("● ")+sBold.Render(s.Title())+sSubtle.Render("  "+core.Ago(s.Info.UpdatedAt, now)))
-			if d := m.doing(s); d != "" {
-				moving = append(moving, clamp(indent(wrap(sText.Render(d), in-2), 2), 2, in)...)
+			moving = append(moving, spread(sGreen.Render("● ")+sBold.Render(s.Title()), sSubtle.Render(core.Ago(s.Info.UpdatedAt, now)), in))
+			if d := cleanProse(m.doing(s)); d != "" {
+				moving = append(moving, clamp(indent(wrap(sText.Render(d), proseWidth(in-2)), 2), 2, in)...)
 			}
 		}
 		switch {
@@ -757,10 +990,11 @@ func (m Model) happeningCard(w int, pid string, ss []core.Session, r core.Rollup
 			age := core.Ago(it.At, now)
 			if open {
 				body = append(body, spread(tag+sSubtle.Render(it.Session), sSubtle.Render(age), in))
-				body = append(body, clamp(indent(wrap(sText.Render(strings.Join(strings.Fields(it.Text), " ")), in-4), 4), 6, in)...)
+				body = append(body, clamp(indent(wrap(sText.Render(cleanProse(it.Text)), proseWidth(in-4)), 4), 6, in)...)
 				continue
 			}
-			text := sText.Render(trunc(agents.FirstSentence(it.Text, 240), in-6-len(age)))
+			clean := cleanProse(agents.FirstSentence(it.Text, 240))
+			text := sText.Render(trunc(clean, in-6-len(age)))
 			body = append(body, spread(tag+text, sSubtle.Render(age), in))
 		}
 	}
@@ -768,20 +1002,22 @@ func (m Model) happeningCard(w int, pid string, ss []core.Session, r core.Rollup
 	if !hasSum && r.Working == 0 {
 		c = cLine
 	}
-	if !open && m.cardSel("happening") {
-		body = append(body, "", sSubtle.Render("enter for every session and result"))
+	if open {
+		body = append(body, "", sSubtle.Render("▾ esc collapses"))
+	} else if m.cardSel("happening") {
+		body = append(body, "", sSubtle.Render("▸ enter for every session and result"))
 	}
-	return cardOn(c, m.cardBg("happening"), w, body)
+	return cardOn(c, m.cardBg("happening"), m.cardSel("happening"), w, body)
 }
 
 // workInMotion shows threads, or else the active sessions, as cards.
 func (m Model) workInMotion(w int, p *store.Project, sc sideItem, ss []core.Session) ([]string, []cardRef) {
 	now := m.opt.Now()
 	type item struct {
-		title, status, needs string
-		state                agents.State
-		ref                  cardRef
-		sess                 *core.Session
+		title, meta, status, needs string
+		state                      agents.State
+		ref                        cardRef
+		sess                       *core.Session
 	}
 	var items []item
 	threads := sc.kind == sideProject && len(p.Threads) > 0
@@ -789,7 +1025,14 @@ func (m Model) workInMotion(w int, p *store.Project, sc sideItem, ss []core.Sess
 		for _, t := range p.Threads {
 			ts := m.sessionsIn(sideItem{kind: sideThread, pid: p.ID, tid: t.ID})
 			tr := core.Roll(ts, now)
-			it := item{title: t.Name, state: tr.State, ref: cardRef{id: "thread:" + t.ID, kind: cardThread, pid: p.ID, tid: t.ID}}
+			meta := ""
+			if tr.Total > 0 {
+				meta = core.Ago(tr.UpdatedAt, now)
+				if tr.Total > 1 {
+					meta = fmt.Sprintf("%d · %s", tr.Total, meta)
+				}
+			}
+			it := item{title: t.Name, meta: meta, state: tr.State, ref: cardRef{id: "thread:" + t.ID, kind: cardThread, pid: p.ID, tid: t.ID}}
 			core.SortSessions(ts, now)
 			for _, s := range ts {
 				if it.status == "" {
@@ -812,8 +1055,8 @@ func (m Model) workInMotion(w int, p *store.Project, sc sideItem, ss []core.Sess
 			if st != agents.NeedsYou && st != agents.Working && st != agents.Ready {
 				continue
 			}
-			it := item{title: s.Title(), state: st, status: m.status1(s), ref: cardRef{id: "sess:" + s.Key, kind: cardSession, key: s.Key}}
-			it.sess = &s
+			sCopy := s
+			it := item{title: s.Title(), meta: core.Ago(s.Info.UpdatedAt, now), state: st, status: m.status1(s), ref: cardRef{id: "sess:" + s.Key, kind: cardSession, key: s.Key}, sess: &sCopy}
 			if st == agents.NeedsYou {
 				it.needs = s.Info.Reason
 			}
@@ -840,13 +1083,17 @@ func (m Model) workInMotion(w int, p *store.Project, sc sideItem, ss []core.Sess
 		if open {
 			keep = 1 << 20
 		}
-		body := []string{dot(it.state) + " " + sMagenta.Bold(true).Render(trunc(it.title, in-2))}
+		meta := ""
+		if it.meta != "" {
+			meta = sSubtle.Render(it.meta)
+		}
+		head := spread(dot(it.state)+" "+sBold.Render(trunc(it.title, in-3-lipgloss.Width(meta))), meta, in)
+		body := []string{head}
 		if it.status != "" {
-			body = append(body, "")
-			body = append(body, clamp(wrap(sText.Render(it.status), in), keep, in)...)
+			body = append(body, clamp(wrap(sText.Render(cleanProse(it.status)), proseWidth(in)), keep, in)...)
 		}
 		if it.needs != "" {
-			body = append(body, clamp(wrap(sAmber.Render("Needs you: "+it.needs), in), keep, in)...)
+			body = append(body, clamp(wrap(sAmber.Render("Needs you: "+cleanProse(it.needs)), proseWidth(in)), keep, in)...)
 		}
 		if open {
 			body = append(body, m.expandedSession(*it.sess, in)...)
@@ -910,59 +1157,104 @@ func (m Model) crumb() string {
 
 // ---- sessions pane ----
 
-func (m Model) viewSessionsPane(w, h int) []string {
+func (m Model) buildSessionsPane(w, h int) ([]string, []int) {
 	v := m.visible()
-	head := spread(sBold.Render("Sessions"), sPill.Render(fmt.Sprintf(" %d ", len(v))), w)
-	hint := sSubtle.Render("Waiting sessions sort first.")
-	if m.filter != "" {
-		hint = sSubtle.Render("filter /") + sMagenta.Render(m.filter) + sSubtle.Render(" · esc clears")
+	titleStyle := sMuted.Bold(true)
+	if m.focus == focusSessions {
+		titleStyle = sTitle
 	}
-	lines := []string{"", head, hint, ""}
+	pill := fmt.Sprintf(" %d ", len(v))
+	if len(v) > 0 && (m.focus == focusSessions || len(v)*2 > h/2) {
+		pill = fmt.Sprintf(" %d/%d ", m.sessIdx+1, len(v))
+	}
+	head := spread(titleStyle.Render("Sessions"), sPill.Render(pill), w)
+	lines := []string{"", head}
+	sessAt := []int{-1, -1}
+	if m.filter != "" {
+		lines = append(lines, sSubtle.Render("filter /")+sMagenta.Render(m.filter)+sSubtle.Render(" · esc clears"))
+		sessAt = append(sessAt, -1)
+	}
+	lines = append(lines, "")
+	sessAt = append(sessAt, -1)
 	listH := h/2 - 2
 	if listH < 4 {
 		listH = 4
 	}
-	rows, _ := m.sessionRows(w, listH)
+	rows, _, rowIdx := m.buildSessionRows(w, listH)
 	lines = append(lines, rows...)
+	sessAt = append(sessAt, rowIdx...)
 	lines = append(lines, "", rule(w))
-	lines = append(lines, m.viewDetail(w)...)
+	sessAt = append(sessAt, -1, -1)
+	det := m.viewDetail(w)
+	lines = append(lines, det...)
+	for range det {
+		sessAt = append(sessAt, -1)
+	}
+	return lines, sessAt
+}
+
+func (m Model) viewSessionsPane(w, h int) []string {
+	lines, _ := m.buildSessionsPane(w, h)
 	return lines
+}
+
+func (m Model) sessionAt(w, h, ry int) (int, bool) {
+	_, sessAt := m.buildSessionsPane(w, h)
+	if ry < 0 || ry >= len(sessAt) || sessAt[ry] < 0 {
+		return 0, false
+	}
+	return sessAt[ry], true
 }
 
 // sessionRows renders the session list and the row index of the selection.
 // maxRows of 0 means no limit.
 func (m Model) sessionRows(w, maxRows int) ([]string, int) {
+	rows, sel, _ := m.buildSessionRows(w, maxRows)
+	return rows, sel
+}
+
+func (m Model) buildSessionRows(w, maxRows int) ([]string, int, []int) {
 	now := m.opt.Now()
 	v := m.visible()
 	if len(v) == 0 {
 		if m.filter != "" {
-			return []string{sSubtle.Render("No sessions match. esc clears the filter.")}, 0
+			return []string{sSubtle.Render("No sessions match. esc clears the filter.")}, 0, []int{-1}
 		}
-		return []string{sSubtle.Render("No sessions here.")}, 0
+		return []string{sSubtle.Render("No sessions here.")}, 0, []int{-1}
 	}
 	var rows []string
+	var rowIdx []int
 	selRow := 0
 	for i, s := range v {
 		st := s.State(now)
 		age := core.Ago(s.Info.UpdatedAt, now)
-		one := spread(sText.Render(trunc(s.Title(), w-4-len(age))), sSubtle.Render(age), w-2)
-		two := dot(st) + " " + stateWord(st) + sSubtle.Render(" · "+agentName(s.Kind)+" · "+s.Pane.Target())
+		titleStyle := sText
+		if i == m.sessIdx {
+			titleStyle = sBold
+		}
+		// Put the status dot beside the title so status and name scan in one fixation.
+		one := spread(dot(st)+" "+titleStyle.Render(trunc(s.Title(), w-6-len(age))), sSubtle.Render(age), w-2)
+		meta := stateWord(st) + sSubtle.Render(" · "+agentName(s.Kind)+" · "+s.Pane.Target())
+		if m.docked != "" && s.Pane.PaneID == m.docked {
+			meta = sTeal.Render("⇄ docked") + sSubtle.Render(" · ") + meta
+		}
+		two := "  " + trunc(meta, w-4)
 		if i == m.sessIdx {
 			selRow = len(rows)
 			bg := cRaised
+			bar := sLine.Render("│")
 			if m.focus == focusSessions {
 				bg = cSelection
+				bar = sBlue.Render("▌")
 			}
-			bar := sBlue.Render("▌")
-			rows = append(rows, paint(bar+" "+pad(one, w-2), bg), paint(bar+" "+pad(trunc(two, w-2), w-2), bg))
+			rows = append(rows, paint(bar+" "+pad(one, w-2), bg), paint(bar+" "+pad(two, w-2), bg))
 		} else {
-			rows = append(rows, "  "+one, "  "+trunc(two, w-2))
+			rows = append(rows, "  "+one, "  "+two)
 		}
-		if i < len(v)-1 {
-			rows = append(rows, sLine.Render(strings.Repeat("─", w)))
-		}
+		rowIdx = append(rowIdx, i, i)
 	}
 	if maxRows > 0 && len(rows) > maxRows {
+		// Reserve a line for top/bottom overflow cues when clipped.
 		start := selRow - maxRows/2
 		if start < 0 {
 			start = 0
@@ -970,10 +1262,39 @@ func (m Model) sessionRows(w, maxRows int) ([]string, int) {
 		if start > len(rows)-maxRows {
 			start = len(rows) - maxRows
 		}
-		rows = rows[start : start+maxRows]
-		selRow -= start
+		// Snap start to an even item boundary so a session is never split in half.
+		start &^= 1
+		if start > len(rows)-maxRows {
+			start = max(0, (len(rows)-maxRows+1)&^1)
+		}
+		avail := maxRows
+		above := start / 2
+		var out []string
+		var outIdx []int
+		if above > 0 {
+			out = append(out, spread("", sSubtle.Render(fmt.Sprintf("↑ %d more", above)), w))
+			outIdx = append(outIdx, -1)
+			avail--
+		}
+		end := start + avail
+		hasBelow := end < len(rows)
+		if hasBelow {
+			end = max(start, end-1)
+		}
+		if end > len(rows) {
+			end = len(rows)
+		}
+		out = append(out, rows[start:end]...)
+		outIdx = append(outIdx, rowIdx[start:end]...)
+		if hasBelow {
+			below := (len(rows) - end + 1) / 2
+			out = append(out, spread("", sSubtle.Render(fmt.Sprintf("↓ %d more", below)), w))
+			outIdx = append(outIdx, -1)
+		}
+		selRow = max(0, selRow-start)
+		return out, selRow, outIdx
 	}
-	return rows, selRow
+	return rows, selRow, rowIdx
 }
 
 func agentName(kind string) string {
@@ -1005,26 +1326,27 @@ func (m Model) detailFor(s core.Session, w int, full bool) []string {
 		clamp = func(l []string, _ int, _ int) []string { return l }
 		cloudMax = 1 << 20
 	}
-	lines := []string{sBold.Render(trunc(s.Title(), w)), stateWord(st) + sSubtle.Render(" · "+s.Kind+" · updated "+core.Ago(s.Info.UpdatedAt, now))}
+	lines := []string{sBold.Render(trunc(s.Title(), w)), stateWord(st) + sSubtle.Render(" · "+agentName(s.Kind)+" · updated "+core.Ago(s.Info.UpdatedAt, now))}
 	if full {
 		lines = nil
 	}
 	if st == agents.NeedsYou && s.Info.Reason != "" && !full {
 		lines = append(lines, "")
-		lines = append(lines, clamp(wrap(sAmber.Render(s.Info.Reason), w), 4, w)...)
+		lines = append(lines, clamp(wrap(sAmber.Render(cleanProse(s.Info.Reason)), w), 4, w)...)
 	}
-	if doing := m.doing(s); doing != "" {
+	// Only show DOING when there is an actual summary distinct from the raw ask.
+	if doing := cleanProse(m.summaryDoing(s)); doing != "" {
 		lines = append(lines, "", sKicker.Render("DOING")+sSubtle.Render("  summary"))
 		lines = append(lines, clamp(wrap(sText.Render(doing), w), 3, w)...)
 	}
 	if s.Info.Ask != "" {
 		lines = append(lines, "", sKicker.Render("LAST ASKED")+sSubtle.Render("  "+core.Ago(s.Info.AskAt, now)))
-		lines = append(lines, clamp(wrap(sText.Render(s.Info.Ask), w), 4, w)...)
+		lines = append(lines, clamp(wrap(sText.Render(cleanProse(s.Info.Ask)), w), 4, w)...)
 	}
 	if len(s.Info.Results) > 0 {
 		r := s.Info.Results[0]
 		lines = append(lines, "", sKicker.Render("LATEST RESULT")+sSubtle.Render("  "+core.Ago(r.At, now)))
-		lines = append(lines, clamp(wrap(sText.Render(strings.Join(strings.Fields(r.Text), " ")), w), 5, w)...)
+		lines = append(lines, clamp(wrap(sText.Render(cleanProse(r.Text)), w), 5, w)...)
 	}
 	c, _ := m.cloudSection([]core.Session{s}, w, cloudMax, true)
 	lines = append(lines, c...)
@@ -1050,6 +1372,8 @@ func (m Model) detailFor(s core.Session, w int, full bool) []string {
 
 func (m Model) viewOrganize(w int) []string {
 	s, _ := m.orgSession()
+	cur, assigned := m.assignment(s)
+	sg, hasSug := core.Suggest(s, m.st, m.sessions)
 	lines := []string{"", sKicker.Render("ORGANIZE"), sTitle.Render(s.Title()), sMuted.Render("Where does this session's work belong?"), ""}
 	for i, o := range m.orgOpts {
 		label := sText.Render(o.label)
@@ -1064,9 +1388,15 @@ func (m Model) viewOrganize(w int) []string {
 		default:
 			label = sBold.Render(o.label)
 		}
-		row := "  " + label
+		tag := ""
+		if assigned && o.pid == cur.Project && o.tid == cur.Thread && !o.newProj && !o.unassign {
+			tag = sSubtle.Render("  current")
+		} else if !assigned && hasSug && o.pid == sg.Project && o.tid == sg.Thread && !o.newProj && !o.unassign {
+			tag = sCyan.Render("  suggested")
+		}
+		row := "  " + label + tag
 		if i == m.orgIdx {
-			row = sSel.Render(pad(sBlue.Render("▸ ")+label, w))
+			row = paint(pad(sBlue.Render("▌ ")+label+tag, w), cSelection)
 		}
 		lines = append(lines, row)
 	}
@@ -1086,14 +1416,23 @@ func (m Model) viewHelp(w int) []string {
 		{"COLORS", [][2]string{{sAmber.Render("●"), "needs you: a question or approval is waiting"}, {sGreen.Render("●"), "working"}, {sCyan.Render("✓"), "finished and ready for your next instruction"}, {sSubtle.Render("○"), "quiet: nothing new in a day"}, {sNewTag.Render("new"), "finished since you last opened the project"}}},
 	}
 	lines := []string{"", sKicker.Render("HELP"), sTitle.Render("Keys"), ""}
+	const kw = 18
+	descW := max(16, w-kw-2)
 	for _, g := range groups {
 		lines = append(lines, sKicker.Render(g.title))
 		for _, k := range g.keys {
-			lines = append(lines, "  "+pad(sKey.Render(k[0]), 18)+sMuted.Render(k[1]))
+			wrapped := wrap(sMuted.Render(k[1]), descW)
+			for i, wl := range wrapped {
+				if i == 0 {
+					lines = append(lines, "  "+pad(sKey.Render(k[0]), kw)+wl)
+				} else {
+					lines = append(lines, strings.Repeat(" ", kw+2)+wl)
+				}
+			}
 		}
 		lines = append(lines, "")
 	}
-	lines = append(lines, sSubtle.Render("Press any key to close. Groupings are saved in "+shortPath(m.opt.StatePath)))
+	lines = append(lines, wrap(sSubtle.Render("j/k or ctrl-d/u scrolls; esc or any other key closes. Groupings are saved in "+shortPath(m.opt.StatePath)), w)...)
 	return lines
 }
 
@@ -1106,15 +1445,21 @@ func shortPath(p string) string {
 	return p
 }
 
+// summaryDoing returns the AI summary's one-line status for s, or empty.
+func (m Model) summaryDoing(s core.Session) string {
+	if a, ok := m.assignment(s); ok {
+		if sum, ok := m.summaryFor(a.Project); ok {
+			return sum.Sessions[s.Key]
+		}
+	}
+	return ""
+}
+
 // doing is the best one-line description of what a session is doing: the
 // summary's line when there is one, otherwise the user's latest ask.
 func (m Model) doing(s core.Session) string {
-	if a, ok := m.assignment(s); ok {
-		if sum, ok := m.summaryFor(a.Project); ok {
-			if d := sum.Sessions[s.Key]; d != "" {
-				return d
-			}
-		}
+	if d := m.summaryDoing(s); d != "" {
+		return d
 	}
 	return s.Info.Ask
 }
