@@ -55,6 +55,7 @@ type Info struct {
 	Branch    string
 	State     State
 	Reason    string // why it needs you, for example the pending question
+	Scheduled string // active scheduled check-in cadence, e.g. "every 20m"
 	Ask       string // latest instruction typed by the user
 	AskAt     time.Time
 	Results   []Result // newest first

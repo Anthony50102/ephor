@@ -126,4 +126,14 @@ func TestRollAndSort(t *testing.T) {
 	if strings.Join(order, ",") != "ask,busy,done,old" {
 		t.Fatalf("order = %v", order)
 	}
+
+	// Scheduled working sessions stay working between ticks, then age to quiet if silent past StaleAfter.
+	freshSched := Session{Key: "s1", Info: agents.Info{State: agents.Working, Scheduled: "every 20m", UpdatedAt: now.Add(-20 * time.Minute)}}
+	staleSched := Session{Key: "s2", Info: agents.Info{State: agents.Working, Scheduled: "every 20m", UpdatedAt: now.Add(-30 * time.Hour)}}
+	if freshSched.State(now) != agents.Working {
+		t.Fatalf("fresh scheduled state = %v, want working", freshSched.State(now))
+	}
+	if staleSched.State(now) != agents.Quiet {
+		t.Fatalf("stale scheduled state = %v, want quiet", staleSched.State(now))
+	}
 }

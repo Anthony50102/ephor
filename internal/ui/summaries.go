@@ -70,8 +70,12 @@ func (m Model) summaryInput(pid string) summary.Input {
 				thread = t.Name
 			}
 		}
+		state := stateName(s.State(now))
+		if s.State(now) == agents.Working && s.Info.Scheduled != "" {
+			state = "working (scheduled check-in " + s.Info.Scheduled + ")"
+		}
 		si := summary.SessionInput{
-			Key: s.Key, Title: s.Title(), Thread: thread, Kind: s.Kind, State: stateName(s.State(now)),
+			Key: s.Key, Title: s.Title(), Thread: thread, Kind: s.Kind, State: state,
 			Reason: s.Info.Reason, Branch: s.Info.Branch, Updated: s.Info.UpdatedAt,
 			Arc: s.Info.Arc, FirstAsk: s.Info.FirstAsk, Said: s.Info.Said,
 		}

@@ -610,7 +610,11 @@ func (m Model) viewOverview(w int) page {
 		age := sSubtle.Render(core.Ago(s.Info.UpdatedAt, now))
 		switch s.State(now) {
 		case agents.Working:
-			moving = append(moving, spread(name, age, in))
+			right := age
+			if s.Info.Scheduled != "" {
+				right = sSubtle.Render(s.Info.Scheduled+" · ") + age
+			}
+			moving = append(moving, spread(name, right, in))
 			if d := cleanProse(m.doing(s)); d != "" {
 				moving = append(moving, clamp(indent(wrap(sMuted.Render(d), movingW), 2), keep, in)...)
 			}
@@ -1068,7 +1072,11 @@ func (m Model) workInMotion(w int, p *store.Project, sc sideItem, ss []core.Sess
 				continue
 			}
 			sCopy := s
-			it := item{title: s.Title(), meta: core.Ago(s.Info.UpdatedAt, now), state: st, status: m.status1(s), ref: cardRef{id: "sess:" + s.Key, kind: cardSession, key: s.Key}, sess: &sCopy}
+			meta := core.Ago(s.Info.UpdatedAt, now)
+			if s.Info.Scheduled != "" && st == agents.Working {
+				meta = s.Info.Scheduled + " · " + meta
+			}
+			it := item{title: s.Title(), meta: meta, state: st, status: m.status1(s), ref: cardRef{id: "sess:" + s.Key, kind: cardSession, key: s.Key}, sess: &sCopy}
 			if st == agents.NeedsYou {
 				it.needs = s.Info.Reason
 			}
@@ -1246,7 +1254,11 @@ func (m Model) buildSessionRows(w, maxRows int) ([]string, int, []int) {
 		}
 		// Put the status dot beside the title so status and name scan in one fixation.
 		one := spread(dot(st)+" "+titleStyle.Render(trunc(s.Title(), w-6-len(age))), sSubtle.Render(age), w-2)
-		meta := stateWord(st) + sSubtle.Render(" · "+agentName(s.Kind)+" · "+s.Pane.Target())
+		stWord := stateWord(st)
+		if st == agents.Working && s.Info.Scheduled != "" {
+			stWord += sSubtle.Render(" · " + s.Info.Scheduled)
+		}
+		meta := stWord + sSubtle.Render(" · "+agentName(s.Kind)+" · "+s.Pane.Target())
 		if m.docked != "" && s.Pane.PaneID == m.docked {
 			meta = sTeal.Render("⇄ docked") + sSubtle.Render(" · ") + meta
 		}
@@ -1338,7 +1350,11 @@ func (m Model) detailFor(s core.Session, w int, full bool) []string {
 		clamp = func(l []string, _ int, _ int) []string { return l }
 		cloudMax = 1 << 20
 	}
-	lines := []string{sBold.Render(trunc(s.Title(), w)), stateWord(st) + sSubtle.Render(" · "+agentName(s.Kind)+" · updated "+core.Ago(s.Info.UpdatedAt, now))}
+	stWord := stateWord(st)
+	if st == agents.Working && s.Info.Scheduled != "" {
+		stWord += sSubtle.Render(" · " + s.Info.Scheduled)
+	}
+	lines := []string{sBold.Render(trunc(s.Title(), w)), stWord + sSubtle.Render(" · "+agentName(s.Kind)+" · updated "+core.Ago(s.Info.UpdatedAt, now))}
 	if full {
 		lines = nil
 	}

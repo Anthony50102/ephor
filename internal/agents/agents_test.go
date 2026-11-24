@@ -263,3 +263,85 @@ func TestCopilotCheckpointArcAndFirstAsk(t *testing.T) {
 		t.Fatalf("FirstAsk should be omitted when Arc is present, got %q", info.FirstAsk)
 	}
 }
+
+func TestCopilotScheduledPrompts(t *testing.T) {
+	write := func(t *testing.T, sid, events string) Info {
+		t.Helper()
+		dir := t.TempDir()
+		sdir := filepath.Join(dir, sid)
+		_ = os.MkdirAll(sdir, 0o755)
+		_ = os.WriteFile(filepath.Join(sdir, "events.jsonl"), []byte(events), 0o644)
+		c := &Copilot{Dir: dir}
+		info, err := c.Read(sid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info
+	}
+
+	// Active recurring schedule keeps an otherwise-ready session Working.
+	active := write(t, "active",
+		`{"type":"user.message","timestamp":"2026-11-24T18:00:00Z","data":{"content":"watch the prover job"}}`+"\n"+
+			`{"type":"session.schedule_created","timestamp":"2026-11-24T18:01:00Z","data":{"id":47,"intervalMs":1200000,"prompt":"check prover"}}`+"\n"+
+			`{"type":"assistant.turn_end","timestamp":"2026-11-24T18:01:05Z","data":{"turnId":"0"}}`+"\n"+
+			`{"type":"user.message","timestamp":"2026-11-24T18:21:00Z","data":{"content":"[Scheduled prompt #47]\ncheck prover"}}`+"\n"+
+			`{"type":"assistant.turn_end","timestamp":"2026-11-24T18:21:10Z","data":{"turnId":"1"}}`+"\n",
+	)
+	if active.State != Working || active.Scheduled != "every 20m" {
+		t.Fatalf("active schedule: state=%v scheduled=%q; want working / every 20m", active.State, active.Scheduled)
+	}
+
+	// Cancelled schedule lets the session settle back to Ready.
+	cancelled := write(t, "cancelled",
+		`{"type":"session.schedule_created","timestamp":"2026-11-24T18:01:00Z","data":{"id":47,"intervalMs":1200000,"prompt":"check"}}`+"\n"+
+			`{"type":"session.schedule_cancelled","timestamp":"2026-11-24T18:22:00Z","data":{"id":47}}`+"\n"+
+			`{"type":"assistant.turn_end","timestamp":"2026-11-24T18:22:05Z","data":{"turnId":"2"}}`+"\n",
+	)
+	if cancelled.State != Ready || cancelled.Scheduled != "" {
+		t.Fatalf("cancelled schedule: state=%v scheduled=%q; want ready / empty", cancelled.State, cancelled.Scheduled)
+	}
+
+	// NeedsYou and Ended are never masked by an active schedule.
+	needs := write(t, "needs",
+		`{"type":"session.schedule_created","timestamp":"2026-11-24T18:01:00Z","data":{"id":9,"intervalMs":300000,"prompt":"poll"}}`+"\n"+
+			`{"type":"tool.execution_start","timestamp":"2026-11-24T18:06:00Z","data":{"toolName":"ask_user","arguments":{"question":"Restart worker?"}}}`+"\n",
+	)
+	if needs.State != NeedsYou || needs.Scheduled != "every 5m" {
+		t.Fatalf("needs_you with schedule: state=%v scheduled=%q; want needs_you / every 5m", needs.State, needs.Scheduled)
+	}
+	ended := write(t, "ended",
+		`{"type":"session.schedule_created","timestamp":"2026-11-24T18:01:00Z","data":{"id":9,"intervalMs":300000,"prompt":"poll"}}`+"\n"+
+			`{"type":"session.shutdown","timestamp":"2026-11-24T18:10:00Z","data":{}}`+"\n",
+	)
+	if ended.State != Ended {
+		t.Fatalf("ended with schedule: state=%v; want ended", ended.State)
+	}
+
+	// One-shot schedule that already fired is done (Ready).
+	oneshot := write(t, "oneshot",
+		`{"type":"session.schedule_created","timestamp":"2026-11-24T18:01:00Z","data":{"id":5,"intervalMs":600000,"recurring":false,"prompt":"check once"}}`+"\n"+
+			`{"type":"user.message","timestamp":"2026-11-24T18:11:00Z","data":{"content":"[Scheduled prompt #5]\ncheck once"}}`+"\n"+
+			`{"type":"assistant.turn_end","timestamp":"2026-11-24T18:11:05Z","data":{"turnId":"1"}}`+"\n",
+	)
+	if oneshot.State != Ready || oneshot.Scheduled != "" {
+		t.Fatalf("fired one-shot: state=%v scheduled=%q; want ready / empty", oneshot.State, oneshot.Scheduled)
+	}
+
+	// Fallback: fired scheduled prompt whose creation scrolled out of window still marks Working.
+	scrolled := write(t, "scrolled",
+		`{"type":"user.message","timestamp":"2026-11-24T18:21:00Z","data":{"content":"[Scheduled prompt #88]\ncheck training"}}`+"\n"+
+			`{"type":"assistant.turn_end","timestamp":"2026-11-24T18:21:10Z","data":{"turnId":"9"}}`+"\n",
+	)
+	if scrolled.State != Working || scrolled.Scheduled != "scheduled" {
+		t.Fatalf("scrolled schedule: state=%v scheduled=%q; want working / scheduled", scrolled.State, scrolled.Scheduled)
+	}
+
+	// Self-paced wakeup re-arm keeps the session Working until it fires or is cancelled.
+	wakeup := write(t, "wakeup",
+		`{"type":"tool.execution_start","timestamp":"2026-11-24T18:00:00Z","data":{"toolName":"manage_schedule","arguments":{"action":"wakeup","id":12,"delaySeconds":1800}}}`+"\n"+
+			`{"type":"assistant.turn_end","timestamp":"2026-11-24T18:00:05Z","data":{"turnId":"1"}}`+"\n",
+	)
+	if wakeup.State != Working || wakeup.Scheduled != "every 30m" {
+		t.Fatalf("self-paced wakeup: state=%v scheduled=%q; want working / every 30m", wakeup.State, wakeup.Scheduled)
+	}
+}

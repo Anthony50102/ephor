@@ -1092,3 +1092,18 @@ func TestVimCounts(t *testing.T) {
 	}
 	h.keys("esc")
 }
+
+func TestScheduledSessionDisplay(t *testing.T) {
+	s := session("p1", "prover", agents.Working, 12*time.Minute, 1)
+	s.Info.Scheduled = "every 20m"
+	h := newHarness(t, []core.Session{s}, true)
+	h.seedProject("Harness", "p1", now)
+
+	// Overview places the scheduled session under HAPPENING NOW (not READY FOR YOU) with its cadence.
+	h.mustSee("HAPPENING NOW", "every 20m")
+	h.mustNotSee("READY FOR YOU")
+
+	// Project view shows the cadence in the session card and right pane.
+	h.keys("L")
+	h.mustSee("WORK IN MOTION", "every 20m · 12m", "working · every 20m")
+}

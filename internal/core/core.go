@@ -41,7 +41,7 @@ func (s Session) Title() string {
 // State is the session state with staleness applied.
 func (s Session) State(now time.Time) agents.State {
 	st := s.Info.State
-	if st == agents.Ready && !s.Info.UpdatedAt.IsZero() && now.Sub(s.Info.UpdatedAt) > StaleAfter {
+	if (st == agents.Ready || (st == agents.Working && s.Info.Scheduled != "")) && !s.Info.UpdatedAt.IsZero() && now.Sub(s.Info.UpdatedAt) > StaleAfter {
 		return agents.Quiet
 	}
 	return st

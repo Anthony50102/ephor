@@ -2,6 +2,7 @@ package agents
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -109,14 +110,20 @@ type copilotEvent struct {
 	AgentID   string    `json:"agentId"`
 	Timestamp time.Time `json:"timestamp"`
 	Data      struct {
+		ID         int    `json:"id"`
+		IntervalMs int64  `json:"intervalMs"`
+		Recurring  *bool  `json:"recurring"`
 		Content    string `json:"content"`
 		Summary    string `json:"summary"`
 		RequestID  string `json:"requestId"`
 		ToolCallID string `json:"toolCallId"`
 		ToolName   string `json:"toolName"`
 		Arguments  struct {
-			Message  string `json:"message"`
-			Question string `json:"question"`
+			Message      string  `json:"message"`
+			Question     string  `json:"question"`
+			Action       string  `json:"action"`
+			ID           int     `json:"id"`
+			DelaySeconds float64 `json:"delaySeconds"`
 		} `json:"arguments"`
 		PermissionRequest struct {
 			Kind            string `json:"kind"`
@@ -135,14 +142,22 @@ var copilotStateTypes = map[string]bool{
 	"user.message": true, "session.task_complete": true, "abort": true,
 	"session.shutdown": true, "subagent.started": true,
 	"session.start": true, "session.resume": true,
+	"session.schedule_created": true, "session.schedule_cancelled": true,
 }
 
 func readCopilotEvents(path string, info *Info) error {
 	decided := false
 	completed := map[string]bool{}
-	return scanBackward(path, maxScanBytes, func(line []byte) bool {
+	schedCancelled := map[int]bool{}
+	schedFired := map[int]int{}
+	activeSchedID := 0
+	activeSchedLabel := ""
+	firedActiveID := 0
+	err := scanBackward(path, maxScanBytes, func(line []byte) bool {
 		typ := eventType(line)
-		if decided && typ != "user.message" && typ != "session.task_complete" && !(typ == "assistant.message" && info.Said == "") {
+		isSched := typ == "session.schedule_created" || typ == "session.schedule_cancelled"
+		isWakeup := typ == "tool.execution_start" && bytes.Contains(line, []byte(`"manage_schedule"`))
+		if decided && !isSched && !isWakeup && typ != "user.message" && typ != "session.task_complete" && !(typ == "assistant.message" && info.Said == "") {
 			return true
 		}
 		if !decided && !copilotStateTypes[typ] && typ != "" {
@@ -163,6 +178,12 @@ func readCopilotEvents(path string, info *Info) error {
 		case "user.message":
 			if main {
 				info.noteAsk(e.Data.Content, e.Timestamp)
+				if id, ok := parseScheduledPromptID(e.Data.Content); ok {
+					schedFired[id]++
+					if !schedCancelled[id] && firedActiveID == 0 {
+						firedActiveID = id
+					}
+				}
 			}
 		case "assistant.message":
 			if main {
@@ -172,12 +193,50 @@ func readCopilotEvents(path string, info *Info) error {
 			if main && len(info.Results) < maxResults && strings.TrimSpace(e.Data.Summary) != "" {
 				info.Results = append(info.Results, Result{At: e.Timestamp, Text: strings.TrimSpace(e.Data.Summary)})
 			}
+		case "session.schedule_cancelled":
+			if e.Data.ID > 0 {
+				schedCancelled[e.Data.ID] = true
+			}
+		case "session.schedule_created":
+			if id := e.Data.ID; id > 0 && !schedCancelled[id] {
+				oneShot := e.Data.Recurring != nil && !*e.Data.Recurring
+				if oneShot && schedFired[id] > 0 {
+					// A one-shot schedule that already fired is done.
+					schedCancelled[id] = true
+					if firedActiveID == id {
+						firedActiveID = 0
+					}
+				} else if activeSchedID == 0 {
+					activeSchedID = id
+					activeSchedLabel = formatScheduleInterval(e.Data.IntervalMs)
+				}
+			}
+		case "tool.execution_start":
+			if e.Data.ToolName == "manage_schedule" && e.Data.Arguments.Action == "wakeup" {
+				if id := e.Data.Arguments.ID; id > 0 && !schedCancelled[id] && schedFired[id] == 0 && activeSchedID == 0 {
+					activeSchedID = id
+					activeSchedLabel = formatScheduleInterval(int64(e.Data.Arguments.DelaySeconds * 1000))
+				}
+			}
 		}
 		if !decided {
 			decided = decideCopilot(e, main, completed, info)
 		}
 		return !(decided && len(info.Asks) >= maxAsks && info.Said != "" && len(info.Results) >= maxResults)
 	})
+	if activeSchedID == 0 && firedActiveID > 0 && !schedCancelled[firedActiveID] {
+		activeSchedID = firedActiveID
+		activeSchedLabel = "scheduled"
+	}
+	if activeSchedID > 0 {
+		info.Scheduled = activeSchedLabel
+		// A session idling between scheduled check-ins is still running an
+		// autonomous loop, not finished and waiting for the user.
+		if info.State == Ready {
+			info.State = Working
+		}
+	}
+	return err
 }
 
 // decideCopilot applies one event, newest first, and reports whether the state is known.
@@ -231,6 +290,39 @@ func noteTime(line []byte, info *Info) {
 	}
 	if json.Unmarshal(line, &e) == nil && e.Timestamp.After(info.UpdatedAt) {
 		info.UpdatedAt = e.Timestamp
+	}
+}
+
+// parseScheduledPromptID extracts the schedule ID from Copilot CLI's
+// "[Scheduled prompt #<id>]" prefix on timer-fired user messages.
+func parseScheduledPromptID(content string) (int, bool) {
+	const prefix = "[Scheduled prompt #"
+	if !strings.HasPrefix(content, prefix) {
+		return 0, false
+	}
+	rest := content[len(prefix):]
+	end := strings.IndexByte(rest, ']')
+	if end <= 0 {
+		return 0, false
+	}
+	id, err := strconv.Atoi(rest[:end])
+	return id, err == nil && id > 0
+}
+
+func formatScheduleInterval(ms int64) string {
+	if ms <= 0 {
+		return "scheduled"
+	}
+	d := time.Duration(ms) * time.Millisecond
+	switch {
+	case d%time.Hour == 0 && d >= time.Hour:
+		return "every " + strconv.FormatInt(int64(d/time.Hour), 10) + "h"
+	case d%time.Minute == 0 && d >= time.Minute:
+		return "every " + strconv.FormatInt(int64(d/time.Minute), 10) + "m"
+	case d >= time.Second:
+		return "every " + strconv.FormatInt(int64(d/time.Second), 10) + "s"
+	default:
+		return "scheduled"
 	}
 }
 
