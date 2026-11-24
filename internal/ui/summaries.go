@@ -42,9 +42,11 @@ func stateName(st agents.State) string {
 	case agents.Working:
 		return "working"
 	case agents.Ready:
-		return "finished, waiting for the next instruction"
+		return "finished a turn, awaiting user follow-up"
+	case agents.OnHold:
+		return "on hold (parked by user)"
 	case agents.Quiet:
-		return "idle for over a day"
+		return "idle for over a week"
 	case agents.Ended:
 		return "ended"
 	}
@@ -77,6 +79,8 @@ func (m Model) summaryInput(pid string) summary.Input {
 			} else {
 				state = "working (scheduled check-in " + s.Info.Scheduled + ")"
 			}
+		} else if s.State(now) == agents.OnHold && s.HoldReason != "" {
+			state = "on hold: " + s.HoldReason
 		}
 		si := summary.SessionInput{
 			Key: s.Key, Title: s.Title(), Thread: thread, Kind: s.Kind, State: state,

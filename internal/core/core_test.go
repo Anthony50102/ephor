@@ -103,16 +103,26 @@ func TestSuggest(t *testing.T) {
 func TestRollAndSort(t *testing.T) {
 	now := time.Now()
 	ss := []Session{
-		sess("old", "old", "", "", agents.Ready, now.Add(-30*time.Hour)),
+		sess("old", "old", "", "", agents.Ready, now.Add(-8*24*time.Hour)),
 		sess("busy", "busy", "", "", agents.Working, now.Add(-time.Minute)),
-		sess("done", "done", "", "", agents.Ready, now.Add(-time.Hour)),
+		sess("done", "done", "", "", agents.Ready, now.Add(-2*24*time.Hour)),
 		sess("ask", "ask", "", "", agents.NeedsYou, now.Add(-2*time.Hour)),
+		sess("parked", "parked", "", "", agents.Ready, now.Add(-10*time.Minute)),
 	}
+	ApplyHolds(ss, map[string]store.Hold{
+		"parked": {At: now.Add(-5 * time.Minute), Reason: "waiting on PR review"},
+	})
 	if ss[0].State(now) != agents.Quiet {
-		t.Fatal("a session finished more than a day ago should be quiet")
+		t.Fatal("a session finished more than a week ago should be quiet")
+	}
+	if ss[2].State(now) != agents.Ready {
+		t.Fatal("an unheld finished session from 2 days ago should remain follow up")
+	}
+	if ss[4].State(now) != agents.OnHold || ss[4].HoldReason != "waiting on PR review" {
+		t.Fatalf("held session state=%v reason=%q", ss[4].State(now), ss[4].HoldReason)
 	}
 	r := Roll(ss, now)
-	if r.State != agents.NeedsYou || r.NeedsYou != 1 || r.Working != 1 || r.Ready != 1 || r.Total != 4 {
+	if r.State != agents.NeedsYou || r.NeedsYou != 1 || r.Working != 1 || r.Ready != 1 || r.OnHold != 1 || r.Total != 5 {
 		t.Fatalf("rollup = %+v", r)
 	}
 	if Roll(nil, now).State != agents.Quiet {
@@ -123,11 +133,11 @@ func TestRollAndSort(t *testing.T) {
 	for _, s := range ss {
 		order = append(order, s.Key)
 	}
-	if strings.Join(order, ",") != "ask,busy,done,old" {
+	if strings.Join(order, ",") != "ask,busy,done,parked,old" {
 		t.Fatalf("order = %v", order)
 	}
 
-	// Scheduled working sessions stay working between ticks, then age to quiet if silent past StaleAfter.
+	// Scheduled working sessions stay working between ticks, then age to quiet if silent past ScheduledStaleAfter.
 	freshSched := Session{Key: "s1", Info: agents.Info{State: agents.Working, Scheduled: "every 20m", UpdatedAt: now.Add(-20 * time.Minute)}}
 	staleSched := Session{Key: "s2", Info: agents.Info{State: agents.Working, Scheduled: "every 20m", UpdatedAt: now.Add(-30 * time.Hour)}}
 	if freshSched.State(now) != agents.Working {
@@ -135,5 +145,34 @@ func TestRollAndSort(t *testing.T) {
 	}
 	if staleSched.State(now) != agents.Quiet {
 		t.Fatalf("stale scheduled state = %v, want quiet", staleSched.State(now))
+	}
+}
+
+func TestHoldAutoWakesOnActivity(t *testing.T) {
+	now := time.Now()
+	heldAt := now.Add(-time.Hour)
+	ss := []Session{
+		sess("still-held", "a", "", "", agents.Ready, heldAt.Add(-time.Minute)),
+		sess("woken-turn", "b", "", "", agents.Ready, heldAt.Add(time.Minute)),
+		sess("woken-working", "c", "", "", agents.Working, heldAt.Add(-time.Minute)),
+		sess("held-quiet", "d", "", "", agents.Ready, now.Add(-10*24*time.Hour)),
+	}
+	ApplyHolds(ss, map[string]store.Hold{
+		"still-held":    {At: heldAt, Reason: "blocked"},
+		"woken-turn":    {At: heldAt, Reason: "blocked"},
+		"woken-working": {At: heldAt, Reason: "blocked"},
+		"held-quiet":    {At: heldAt, Reason: "next sprint"},
+	})
+	if ss[0].State(now) != agents.OnHold {
+		t.Fatalf("still-held = %v, want on hold", ss[0].State(now))
+	}
+	if ss[1].State(now) != agents.Ready || ss[1].Held {
+		t.Fatalf("woken-turn = %v held=%v, want follow up", ss[1].State(now), ss[1].Held)
+	}
+	if ss[2].State(now) != agents.Working || ss[2].Held {
+		t.Fatalf("woken-working = %v held=%v, want working", ss[2].State(now), ss[2].Held)
+	}
+	if ss[3].State(now) != agents.OnHold || ss[3].HoldReason != "next sprint" {
+		t.Fatalf("held-quiet = %v reason=%q, want on hold", ss[3].State(now), ss[3].HoldReason)
 	}
 }

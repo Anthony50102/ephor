@@ -1099,9 +1099,9 @@ func TestScheduledSessionDisplay(t *testing.T) {
 	h := newHarness(t, []core.Session{s}, true)
 	h.seedProject("Harness", "p1", now)
 
-	// Overview places the scheduled session under HAPPENING NOW (not READY FOR YOU) with its cadence.
+	// Overview places the scheduled session under HAPPENING NOW (not FOLLOW UP) with its cadence.
 	h.mustSee("HAPPENING NOW", "every 20m")
-	h.mustNotSee("READY FOR YOU")
+	h.mustNotSee("FOLLOW UP")
 
 	// Project view shows the cadence in the session card and right pane.
 	h.keys("L")
@@ -1157,4 +1157,167 @@ func TestCompactSidebarAndThreadHappening(t *testing.T) {
 	}
 	h.mustSee("HAPPENING NOW", "Running wave 8 training checks.")
 	h.mustNotSee("Confirmed A100 fits full context.")
+}
+
+func TestFocusedRelativeNumbers(t *testing.T) {
+	ss := []core.Session{
+		session("s1", "alpha", agents.Working, time.Minute, 1),
+		session("s2", "beta", agents.Ready, 2*time.Minute, 2),
+		session("s3", "gamma", agents.Ready, 3*time.Minute, 3),
+	}
+	h := newHarness(t, ss, true)
+	h.seedProject("One", "s1", now)
+	h.seedProject("Two", "s2", now)
+	h.seedProject("Three", "s3", now)
+
+	// Sidebar focused by default: non-active rows show dim relative offsets,
+	// active row stays clean, and unfocused sessions list has no numbers.
+	h.m.focus = focusSide
+	h.m.sideIdx = 0
+	sideLines, _ := h.m.buildSide(30, 30)
+	sidePlain := ansi.Strip(strings.Join(sideLines, "\n"))
+	if !strings.Contains(sidePlain, " 1 ◇ Unassigned") || !strings.Contains(sidePlain, " 2 ● One") {
+		t.Fatalf("expected relative numbers in focused sidebar, got:\n%s", sidePlain)
+	}
+	if strings.Contains(sidePlain, " 0 ≡ Overview") {
+		t.Fatalf("active sidebar row should not display 0, got:\n%s", sidePlain)
+	}
+	sessLines, _, _ := h.m.buildSessionRows(40, 20)
+	sessPlain := ansi.Strip(strings.Join(sessLines, "\n"))
+	if strings.Contains(sessPlain, " 1 ✓ beta") {
+		t.Fatalf("unfocused session list should not display relative numbers, got:\n%s", sessPlain)
+	}
+
+	// Focusing sessions moves relative numbers there and clears them from sidebar.
+	h.m.focus = focusSessions
+	h.m.selectSession(0)
+	sessLines, _, _ = h.m.buildSessionRows(40, 20)
+	sessPlain = ansi.Strip(strings.Join(sessLines, "\n"))
+	if !strings.Contains(sessPlain, " 1 ✓ beta") || !strings.Contains(sessPlain, " 2 ✓ gamma") {
+		t.Fatalf("expected relative numbers in focused session list, got:\n%s", sessPlain)
+	}
+	sideLines, _ = h.m.buildSide(30, 30)
+	sidePlain = ansi.Strip(strings.Join(sideLines, "\n"))
+	if strings.Contains(sidePlain, " 1 ◇ Unassigned") {
+		t.Fatalf("unfocused sidebar should not display relative numbers, got:\n%s", sidePlain)
+	}
+
+	// Focusing center renders relative card offsets in the middle margin.
+	h.m.focus = focusCenter
+	h.m.firstCard()
+	v := h.screen()
+	if !strings.Contains(v, "│ 1 ") {
+		t.Fatalf("expected center card relative offset in margin, got:\n%s", v)
+	}
+
+	// :nornu hides relative numbers and persists the flag; space # toggles back on.
+	h.keys(":")
+	h.typeText("nornu")
+	h.keys("enter")
+	if !h.m.st.NoRelativeNumbers {
+		t.Fatal(":nornu should persist NoRelativeNumbers")
+	}
+	h.m.focus = focusSide
+	sideLines, _ = h.m.buildSide(30, 30)
+	if strings.Contains(ansi.Strip(strings.Join(sideLines, "\n")), " 1 ◇ Unassigned") {
+		t.Fatal("relative numbers should stay hidden after :nornu")
+	}
+	h.keys(" ", "#")
+	if h.m.st.NoRelativeNumbers {
+		t.Fatal("space # should toggle relative numbers back on")
+	}
+
+	// Organize modal shows relative numbers when enabled.
+	h.m.focus = focusSessions
+	h.keys("m")
+	orgPlain := ansi.Strip(strings.Join(h.m.viewOrganize(60), "\n"))
+	if !strings.Contains(orgPlain, " 1 ") {
+		t.Fatalf("expected relative numbers in organize modal, got:\n%s", orgPlain)
+	}
+	h.keys("esc")
+}
+
+func TestHoldAndFollowUpWorkflow(t *testing.T) {
+	s1 := session("s1", "pt train", agents.Working, time.Minute, 1)
+	s2 := session("s2", "pt serving", agents.Ready, 2*time.Hour, 2)
+	s3 := session("s3", "docs cleanup", agents.Ready, 3*time.Hour, 3)
+	h := newHarness(t, []core.Session{s1, s2, s3}, true)
+	h.m.change(func(st *store.State) error {
+		p1, _ := st.AddProject("Nabu", now)
+		p2, _ := st.AddProject("Docs", now)
+		st.AssignSession(s1.Key, p1.ID, "", "", now)
+		st.AssignSession(s2.Key, p1.ID, "", "", now)
+		st.AssignSession(s3.Key, p2.ID, "", "", now)
+		return nil
+	})
+
+	// Pause glyph stays single-width so panel columns never misalign.
+	if w := ansi.StringWidth("‖"); w != 1 {
+		t.Fatalf("pause glyph width = %d, want 1", w)
+	}
+
+	// Initially both finished sessions appear under FOLLOW UP on Overview.
+	h.mustSee("FOLLOW UP", "pt serving", "docs cleanup")
+
+	// Holding docs cleanup from the session list removes it from FOLLOW UP and shows on hold.
+	h.m.focus = focusSessions
+	h.m.syncSelectionTo(s3.Key)
+	h.keys("x")
+	if !h.m.st.Holds[s3.Key].At.Equal(now) {
+		t.Fatalf("expected hold persisted for %s, got %+v", s3.Key, h.m.st.Holds)
+	}
+	h.mustSee("1 on hold", "on hold")
+
+	// X attaches a blocker note, displayed in session row, detail pane, and project ON HOLD section.
+	h.keys("X")
+	h.typeText("waiting on PR #3449 review")
+	h.keys("enter")
+	h.mustSee("waiting on PR #3449 review")
+	h.keys("L", "L") // open Docs project
+	h.mustSee("ON HOLD", "docs cleanup", "waiting on PR #3449 review")
+
+	// Pressing x on Docs in the sidebar resumes the held session back to follow up.
+	h.m.focus = focusSide
+	h.keys("x")
+	if _, ok := h.m.st.Holds[s3.Key]; ok {
+		t.Fatal("x on an all-held project should resume its sessions")
+	}
+	h.mustSee("Resumed 1 session in Docs")
+
+	// Pressing x on Nabu in the sidebar holds its finished session while leaving the working one active.
+	h.keys("H") // back to Nabu
+	h.keys("x")
+	if _, ok := h.m.st.Holds[s2.Key]; !ok {
+		t.Fatal("expected pt serving to be placed on hold")
+	}
+	if _, ok := h.m.st.Holds[s1.Key]; ok {
+		t.Fatal("working session pt train must not be placed on hold")
+	}
+	h.mustSee("1 still active")
+
+	// Auto-wake: when pt serving gets newer activity on refresh, it leaves OnHold automatically.
+	s2Woken := s2
+	s2Woken.Info.UpdatedAt = now.Add(5 * time.Minute)
+	h.send(sessionsMsg{ss: []core.Session{s1, s2Woken, s3}})
+	for _, s := range h.m.sessions {
+		if s.Key == s2.Key && s.State(now.Add(6*time.Minute)) != agents.Ready {
+			t.Fatalf("woken session state = %v, want follow up", s.State(now.Add(6*time.Minute)))
+		}
+	}
+
+	// :hold <note> and :resume work from command mode.
+	h.m.focus = focusSessions
+	h.m.syncSelectionTo(s2.Key)
+	h.keys(":")
+	h.typeText("hold pick up Monday")
+	h.keys("enter")
+	if h.m.st.Holds[s2.Key].Reason != "pick up Monday" {
+		t.Fatalf(":hold reason = %q, want pick up Monday", h.m.st.Holds[s2.Key].Reason)
+	}
+	h.keys(":")
+	h.typeText("resume")
+	h.keys("enter")
+	if _, ok := h.m.st.Holds[s2.Key]; ok {
+		t.Fatal(":resume should clear the hold")
+	}
 }

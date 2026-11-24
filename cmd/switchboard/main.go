@@ -129,6 +129,7 @@ func list(src core.Sources, st *store.State, jsonOut bool) error {
 	if err != nil {
 		return err
 	}
+	core.ApplyHolds(ss, st.Holds)
 	now := time.Now()
 	core.SortSessions(ss, now)
 	placement := func(s core.Session) (string, string) {
@@ -147,23 +148,24 @@ func list(src core.Sources, st *store.State, jsonOut bool) error {
 	}
 	if jsonOut {
 		type row struct {
-			Key       string    `json:"key"`
-			Kind      string    `json:"kind"`
-			Title     string    `json:"title"`
-			Tmux      string    `json:"tmux"`
-			State     string    `json:"state"`
-			Scheduled string    `json:"scheduled,omitempty"`
-			Reason    string    `json:"reason,omitempty"`
-			Ask       string    `json:"ask,omitempty"`
-			Project   string    `json:"project,omitempty"`
-			Thread    string    `json:"thread,omitempty"`
-			Updated   time.Time `json:"updated"`
+			Key        string    `json:"key"`
+			Kind       string    `json:"kind"`
+			Title      string    `json:"title"`
+			Tmux       string    `json:"tmux"`
+			State      string    `json:"state"`
+			Scheduled  string    `json:"scheduled,omitempty"`
+			HoldReason string    `json:"holdReason,omitempty"`
+			Reason     string    `json:"reason,omitempty"`
+			Ask        string    `json:"ask,omitempty"`
+			Project    string    `json:"project,omitempty"`
+			Thread     string    `json:"thread,omitempty"`
+			Updated    time.Time `json:"updated"`
 		}
 		rows := []row{}
 		for _, s := range ss {
 			p, t := placement(s)
 			rows = append(rows, row{s.Key, s.Kind, s.Title(), s.Pane.Target(), s.State(now).String(),
-				s.Info.Scheduled, s.Info.Reason, s.Info.Ask, p, t, s.Info.UpdatedAt})
+				s.Info.Scheduled, s.HoldReason, s.Info.Reason, s.Info.Ask, p, t, s.Info.UpdatedAt})
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -228,6 +230,7 @@ func summarize(src core.Sources, st *store.State, run summary.Runner, check clou
 	if err != nil {
 		return err
 	}
+	core.ApplyHolds(ss, st.Holds)
 	now := time.Now()
 	res := scanCloud(cloudPath, ss)
 	sums := summary.LoadCache(summaryPath)

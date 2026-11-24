@@ -16,18 +16,25 @@ import (
 	"github.com/anthonypoole/switchboard/internal/tmux"
 )
 
-// StaleAfter is how long a finished session stays "ready" before it counts as quiet.
-const StaleAfter = 24 * time.Hour
+// StaleAfter is how long an unheld finished session stays "follow up" before it
+// falls back to quiet.
+const StaleAfter = 7 * 24 * time.Hour
+
+// ScheduledStaleAfter is how long a scheduled session can go completely silent
+// before it ages out to quiet.
+const ScheduledStaleAfter = 24 * time.Hour
 
 // Session is one live agent in a tmux pane.
 type Session struct {
 	// Key is the stable identity used for grouping. It is the agent's own
 	// session ID when known, because tmux windows get renumbered and reused.
-	Key  string
-	Kind string
-	PID  int
-	Pane tmux.Pane
-	Info agents.Info
+	Key        string
+	Kind       string
+	PID        int
+	Pane       tmux.Pane
+	Info       agents.Info
+	Held       bool
+	HoldReason string
 }
 
 // Title is the best short name for the session.
@@ -38,13 +45,41 @@ func (s Session) Title() string {
 	return s.Pane.WindowName
 }
 
-// State is the session state with staleness applied.
+// State is the session state with holds and staleness applied.
 func (s Session) State(now time.Time) agents.State {
 	st := s.Info.State
-	if (st == agents.Ready || (st == agents.Working && s.Info.Scheduled != "")) && !s.Info.UpdatedAt.IsZero() && now.Sub(s.Info.UpdatedAt) > StaleAfter {
+	if st == agents.Working && s.Info.Scheduled != "" && !s.Info.UpdatedAt.IsZero() && now.Sub(s.Info.UpdatedAt) > ScheduledStaleAfter {
+		return agents.Quiet
+	}
+	if s.Held && (st == agents.Ready || st == agents.Quiet) {
+		return agents.OnHold
+	}
+	if st == agents.Ready && !s.Info.UpdatedAt.IsZero() && now.Sub(s.Info.UpdatedAt) > StaleAfter {
 		return agents.Quiet
 	}
 	return st
+}
+
+// ApplyHolds attaches active user holds to sessions. A hold automatically
+// clears once the session is working, needs attention, or has activity newer
+// than when the hold was placed.
+func ApplyHolds(ss []Session, holds map[string]store.Hold) {
+	for i := range ss {
+		ss[i].Held = false
+		ss[i].HoldReason = ""
+		h, ok := holds[ss[i].Key]
+		if !ok {
+			continue
+		}
+		if ss[i].Info.State == agents.NeedsYou || ss[i].Info.State == agents.Working {
+			continue
+		}
+		if !ss[i].Info.UpdatedAt.IsZero() && ss[i].Info.UpdatedAt.After(h.At) {
+			continue
+		}
+		ss[i].Held = true
+		ss[i].HoldReason = h.Reason
+	}
 }
 
 // Sources are the inputs Discover needs. Tests replace them.
@@ -167,6 +202,7 @@ type Rollup struct {
 	NeedsYou  int
 	Working   int
 	Ready     int
+	OnHold    int
 	Total     int
 	UpdatedAt time.Time
 }
@@ -184,6 +220,8 @@ func Roll(ss []Session, now time.Time) Rollup {
 			r.Working++
 		case agents.Ready:
 			r.Ready++
+		case agents.OnHold:
+			r.OnHold++
 		}
 		if st > r.State {
 			r.State = st

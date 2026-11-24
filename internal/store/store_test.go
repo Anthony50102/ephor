@@ -21,6 +21,8 @@ func TestRoundTripAndDeletes(t *testing.T) {
 	tid := th.ID
 	s.AssignSession("copilot:a", pid, tid, "a", now)
 	s.AssignSession("copilot:b", pid, "", "b", now)
+	s.SetHold("copilot:b", now, "waiting on PR review")
+	s.NoRelativeNumbers = true
 	if err := s.Save(path); err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +32,13 @@ func TestRoundTripAndDeletes(t *testing.T) {
 	}
 	if s2.Project(pid).Thread(tid).Name != "Retries" || s2.Assign["copilot:a"].Thread != tid {
 		t.Fatalf("round trip lost data: %+v", s2)
+	}
+	if h, ok := s2.Holds["copilot:b"]; !ok || h.Reason != "waiting on PR review" || !s2.NoRelativeNumbers {
+		t.Fatalf("round trip lost hold or rnu preference: holds=%+v noRnu=%v", s2.Holds, s2.NoRelativeNumbers)
+	}
+	s2.ClearHold("copilot:b")
+	if _, ok := s2.Holds["copilot:b"]; ok {
+		t.Fatal("ClearHold should remove the hold")
 	}
 
 	s2.DeleteThread(pid, tid)

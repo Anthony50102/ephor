@@ -216,13 +216,20 @@ func (m Model) replying() bool { return m.mode == modeInput && m.inputKind == in
 
 // sendReply types text into the agent's pane and presses Enter.
 func (m *Model) sendReply(text string) {
-	if _, ok := m.sessionByKey(m.inputKey); !ok {
+	s, ok := m.sessionByKey(m.inputKey)
+	if !ok {
 		m.setErr(fmt.Errorf("%s has closed", m.replyTitle))
 		return
 	}
 	if err := m.opt.Type(m.replyPane, text); err != nil {
 		m.setErr(err)
 		return
+	}
+	if text != "" && s.Held {
+		m.change(func(st *store.State) error {
+			st.ClearHold(s.Key)
+			return nil
+		})
 	}
 	if text == "" {
 		m.setStatus("Pressed Enter in " + m.replyTitle)

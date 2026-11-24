@@ -58,6 +58,9 @@ const (
 	aUndock
 	aPark
 	aParkAll
+	aHold
+	aHoldNote
+	aToggleRelNum
 	aNavLeft
 	aNavRight
 	aNavDown
@@ -76,7 +79,7 @@ var normalKeys = map[string]action{
 	"enter": aEnter, "m": aMove, "a": aAccept,
 	"n": aNewProject, "t": aNewThread, "e": aDescribe, "r": aRename, "d": aDelete,
 	"o": aLaunch, "i": aReply, "y": aCopy, "s": aConnect, "v": aDock, "V": aUndock,
-	"p": aPark, "P": aParkAll,
+	"p": aPark, "P": aParkAll, "x": aHold, "X": aHoldNote,
 	"/": aFilter, "esc": aEsc, "u": aRefresh, ":": aCommand,
 }
 
@@ -96,6 +99,8 @@ var prefixes = map[string][]keyHint{
 		{"i", "type to the session", aReply},
 		{"v", "dock the session beside this panel (again sends it back)", aDock},
 		{"V", "undock the docked session from anywhere", aUndock},
+		{"x", "hold / resume (park finished work for later)", aHold},
+		{"X", "hold with a note (blocker or waiting reason)", aHoldNote},
 		{"p", "park this session in the background agents session", aPark},
 		{"P", "park all agent windows in the background agents session", aParkAll},
 		{"n", "new project", aNewProject},
@@ -103,6 +108,7 @@ var prefixes = map[string][]keyHint{
 		{"e", "toggle projects panel", aToggleSide},
 		{"l", "toggle sessions panel", aToggleRight},
 		{"z", "zen: hide both panels", aZen},
+		{"#", "toggle relative line numbers", aToggleRelNum},
 		{"r", "rename", aRename},
 		{"d", "delete", aDelete},
 		{"m", "move session to a project", aMove},
@@ -365,6 +371,12 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		return m, m.parkOne()
 	case aParkAll:
 		return m, m.parkAll()
+	case aHold:
+		m.toggleHold()
+	case aHoldNote:
+		m.startHoldNote()
+	case aToggleRelNum:
+		m.toggleRelativeNumbers()
 	case aCopy:
 		m.copyAccess()
 	case aConnect:
@@ -432,8 +444,38 @@ func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
 		return m, m.parkOne()
 	case "park-all", "parkall":
 		return m, m.parkAll()
+	case "hold":
+		if arg == "" {
+			m.toggleHold()
+		} else {
+			m.holdWithReason(arg)
+		}
+	case "resume", "unhold":
+		m.resumeHold()
+	case "rnu", "relativenumber":
+		switch strings.ToLower(arg) {
+		case "on", "true", "1":
+			m.setRelativeNumbers(true)
+		case "off", "false", "0":
+			m.setRelativeNumbers(false)
+		default:
+			m.toggleRelativeNumbers()
+		}
+	case "nornu", "norelativenumber":
+		m.setRelativeNumbers(false)
+	case "set":
+		switch arg {
+		case "rnu", "relativenumber":
+			m.setRelativeNumbers(true)
+		case "nornu", "norelativenumber":
+			m.setRelativeNumbers(false)
+		case "rnu!", "relativenumber!":
+			m.toggleRelativeNumbers()
+		default:
+			m.setErr(fmt.Errorf("unknown option: %s (try :set rnu, :set nornu, :set rnu!)", arg))
+		}
 	default:
-		m.setErr(fmt.Errorf("not a command: %s (try :q, :help, :new <name>, :undock, :park, :park-all)", cmd))
+		m.setErr(fmt.Errorf("not a command: %s (try :q, :help, :new <name>, :hold [note], :resume, :rnu, :undock, :park)", cmd))
 	}
 	return m, nil
 }

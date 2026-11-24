@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/anthonypoole/switchboard/internal/agents"
 	"github.com/anthonypoole/switchboard/internal/core"
@@ -67,6 +68,30 @@ func (m *Model) scrollCenter(n int) {
 	m.centerOff = clampOff(clampOff(m.centerOff, len(lines), l.bodyH)+n, len(lines), l.bodyH)
 }
 
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+// relNum formats a dim 2-column relative jump offset for the focused panel.
+func relNum(d int) string {
+	if d > 99 {
+		d = 99
+	}
+	return sSubtle.Render(fmt.Sprintf("%2d", d))
+}
+
+func holdNoteFor(ss []core.Session, now time.Time) string {
+	for _, s := range ss {
+		if s.State(now) == agents.OnHold && s.HoldReason != "" {
+			return s.HoldReason
+		}
+	}
+	return ""
+}
+
 // View renders the whole screen.
 func (m Model) View() string {
 	w, h := m.width, m.height
@@ -78,19 +103,38 @@ func (m Model) View() string {
 
 	pg := m.centerPage(lay)
 	center, selLine := pg.lines, pg.selLine
-	// A bar in the left margin marks the highlighted card.
+	curCard := m.cardIndex(pg.cards)
+	centerRnu := m.showRelativeNumbers() && m.focus == focusCenter && m.mode == modeNormal && !m.replying() && curCard >= 0
+	blankMargin := "  "
+	selBar := sBlue.Render("▌") + " "
+	if centerRnu {
+		blankMargin = "   "
+		selBar = sBlue.Render("▌") + "  "
+	}
+	// A bar in the left margin marks the highlighted card, and dim relative
+	// card distances appear when the middle pane is focused.
 	margin := make([]string, len(center))
 	for i := range margin {
-		margin[i] = "  "
+		margin[i] = blankMargin
 	}
-	if i := m.cardIndex(pg.cards); i >= 0 && m.cardSel(m.cardID) {
+	if curCard >= 0 && m.cardSel(m.cardID) {
 		// Raised cards already render their own thickened ▌ bar when selected.
 		switch m.cardID {
 		case "happening", "ov:moving", "ov:ready":
 		default:
-			for j := pg.cards[i].start; j < pg.cards[i].end; j++ {
-				margin[j] = sBlue.Render("▌") + " "
+			for j := pg.cards[curCard].start; j < pg.cards[curCard].end; j++ {
+				margin[j] = selBar
 			}
+		}
+	}
+	if centerRnu {
+		usedRow := map[int]bool{pg.cards[curCard].start: true}
+		for ci, c := range pg.cards {
+			if ci == curCard || c.start < 0 || c.start >= len(margin) || usedRow[c.start] {
+				continue
+			}
+			margin[c.start] = relNum(absInt(ci-curCard)) + " "
+			usedRow[c.start] = true
 		}
 	}
 	total := len(center)
@@ -115,7 +159,7 @@ func (m Model) View() string {
 		avail := bodyH
 		if off > 0 {
 			vis = append(vis, spread("", sSubtle.Render(fmt.Sprintf("↑ %d more · ctrl-u", off)), centerW-4))
-			visM = append(visM, "  ")
+			visM = append(visM, blankMargin)
 			avail--
 		}
 		hasBelow := off+avail < total
@@ -131,7 +175,7 @@ func (m Model) View() string {
 		if hasBelow {
 			below := total - end
 			vis = append(vis, spread("", sBlue.Render(fmt.Sprintf("↓ %d more · ctrl-d or wheel", below)), centerW-4))
-			visM = append(visM, "  ")
+			visM = append(visM, blankMargin)
 		}
 		center, margin = vis, visM
 	}
@@ -249,9 +293,12 @@ func (m Model) viewHeader(w int) string {
 		parts = append(parts, sSubtle.Render("○ 0 working"))
 	}
 	if r.Ready > 0 {
-		parts = append(parts, sCyan.Render("✓")+sMuted.Render(fmt.Sprintf(" %d ready", r.Ready)))
+		parts = append(parts, sCyan.Render("✓")+sMuted.Render(fmt.Sprintf(" %d follow up", r.Ready)))
 	} else {
-		parts = append(parts, sSubtle.Render("✓ 0 ready"))
+		parts = append(parts, sSubtle.Render("✓ 0 follow up"))
+	}
+	if r.OnHold > 0 {
+		parts = append(parts, sMuted.Render("‖")+sSubtle.Render(fmt.Sprintf(" %d on hold", r.OnHold)))
 	}
 	if inbox > 0 {
 		parts = append(parts, sMagenta.Render("◇")+sMuted.Render(fmt.Sprintf(" %d unassigned", inbox)))
@@ -293,11 +340,11 @@ func (m Model) viewFooter(w int) string {
 	case m.mode == modeOrganize:
 		keys = [][2]string{{"j/k", "move"}, {"enter", "place here"}, {"t", "new thread"}, {"n", "new project"}, {"esc", "cancel"}}
 	case m.focus == focusSide:
-		keys = [][2]string{{"j/k", "browse"}, {"enter/l", "brief"}, {"H/L", "projects"}, {"]d", "needs you"}, {"n", "new project"}, {"e", "describe"}}
+		keys = [][2]string{{"j/k", "browse"}, {"enter/l", "brief"}, {"x", m.holdHint()}, {"H/L", "projects"}, {"]d", "needs you"}, {"n", "new project"}}
 	case m.focus == focusCenter:
 		keys = m.centerFooterKeys()
 	default:
-		keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"v", "dock"}, {"i", "answer"}, {"m", "move"}, {"a", "accept"}, {"/", "filter"}, {"h", "brief"}}
+		keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"v", "dock"}, {"i", "answer"}, {"x", m.holdHint()}, {"m", "move"}, {"/", "filter"}, {"h", "brief"}}
 	}
 	if m.docked != "" && m.mode != modeOrganize {
 		var lead [][2]string
@@ -359,13 +406,25 @@ func (m Model) viewFooter(w int) string {
 	return spread(left, right+" ", w)
 }
 
+// holdHint returns "resume" when the current hold target only has held
+// sessions, otherwise "hold".
+func (m Model) holdHint() string {
+	if tgt, ok := m.holdTargetFor(); ok {
+		holdable, held, _ := m.partitionHold(tgt.sessions)
+		if len(holdable) == 0 && len(held) > 0 {
+			return "resume"
+		}
+	}
+	return "hold"
+}
+
 // centerFooterKeys picks hints relevant to the currently highlighted card.
 func (m Model) centerFooterKeys() [][2]string {
 	var keys [][2]string
 	keys = append(keys, [2]string{"j/k", "cards"})
 	switch {
 	case strings.HasPrefix(m.cardID, "proj:"), strings.HasPrefix(m.cardID, "thread:"):
-		keys = append(keys, [2]string{"enter", "open"})
+		keys = append(keys, [2]string{"enter", "open"}, [2]string{"x", m.holdHint()})
 	case strings.HasPrefix(m.cardID, "res:"):
 		if m.open(m.cardID) {
 			keys = append(keys, [2]string{"esc", "collapse"})
@@ -379,7 +438,7 @@ func (m Model) centerFooterKeys() [][2]string {
 		} else {
 			keys = append(keys, [2]string{"enter", "expand"})
 		}
-		keys = append(keys, [2]string{"i", "answer"}, [2]string{"v", "dock"})
+		keys = append(keys, [2]string{"i", "answer"}, [2]string{"v", "dock"}, [2]string{"x", m.holdHint()})
 	case m.cardID == "happening":
 		if m.open(m.cardID) {
 			keys = append(keys, [2]string{"esc", "collapse"})
@@ -412,10 +471,14 @@ func (m Model) buildSide(w, h int) ([]string, []int) {
 	if m.focus == focusSide {
 		kicker = sBlue.Bold(true)
 	}
+	showRnu := m.showRelativeNumbers() && m.focus == focusSide && m.mode == modeNormal
 	sel := 0
 	add := func(i int, glyph, label, right string) {
 		active := i == m.sideIdx
 		inner := w - 2
+		if showRnu {
+			inner = w - 4
+		}
 		gW := lipgloss.Width(glyph)
 		rW := lipgloss.Width(right)
 		maxLabel := max(4, inner-gW-1-rW)
@@ -432,7 +495,15 @@ func (m Model) buildSide(w, h int) ([]string, []int) {
 				bg = cSelection
 				bar = sBlue.Render("▌")
 			}
-			push(paint(bar+pad(row, inner)+" ", bg), i)
+			if showRnu {
+				push(paint(bar+"  "+pad(row, inner)+" ", bg), i)
+			} else {
+				push(paint(bar+pad(row, inner)+" ", bg), i)
+			}
+			return
+		}
+		if showRnu {
+			push(relNum(absInt(i-m.sideIdx))+" "+row, i)
 			return
 		}
 		push(" "+row, i)
@@ -503,10 +574,10 @@ func (m Model) buildSide(w, h int) ([]string, []int) {
 	push("", -1)
 	if w < 26 {
 		push(" "+sAmber.Render("●")+sSubtle.Render(" wait   ")+sGreen.Render("●")+sSubtle.Render(" work"), -1)
-		push(" "+sCyan.Render("✓")+sSubtle.Render(" ready  ○ quiet"), -1)
+		push(" "+sCyan.Render("✓")+sSubtle.Render(" next   ")+sMuted.Render("‖")+sSubtle.Render(" hold"), -1)
 	} else {
 		push(" "+sAmber.Render("●")+sSubtle.Render(" needs you  ")+sGreen.Render("●")+sSubtle.Render(" working"), -1)
-		push(" "+sCyan.Render("✓")+sSubtle.Render(" ready      ○ quiet"), -1)
+		push(" "+sCyan.Render("✓")+sSubtle.Render(" follow up  ")+sMuted.Render("‖")+sSubtle.Render(" on hold"), -1)
 	}
 	if len(lines) > h {
 		// Keep the selected item visible on short terminals.
@@ -637,14 +708,14 @@ func (m Model) viewOverview(w int) page {
 		pg.addCard(cardRef{id: "ov:moving"}, cardOn(cGreen, m.cardBg("ov:moving"), m.cardSel("ov:moving"), w, append([]string{spread(sGreen.Bold(true).Render("HAPPENING NOW"), cue, in)}, moving...)))
 	}
 	if ready != nil {
-		right := sSubtle.Render("finished in the last day")
+		right := sSubtle.Render("active · x holds")
 		if m.open("ov:ready") {
 			right = sSubtle.Render("▾ esc collapses")
 		} else if m.cardSel("ov:ready") {
 			right = sSubtle.Render("▸ enter expands")
 		}
 		pg.add("")
-		pg.addCard(cardRef{id: "ov:ready"}, cardOn(cCyan, m.cardBg("ov:ready"), m.cardSel("ov:ready"), w, append([]string{spread(sCyan.Bold(true).Render("READY FOR YOU"), right, in)}, ready...)))
+		pg.addCard(cardRef{id: "ov:ready"}, cardOn(cCyan, m.cardBg("ov:ready"), m.cardSel("ov:ready"), w, append([]string{spread(sCyan.Bold(true).Render("FOLLOW UP"), right, in)}, ready...)))
 	}
 
 	type card struct {
@@ -696,7 +767,11 @@ func (m Model) viewOverview(w int) page {
 			}
 			body = append(body, clamp(wrap(sText.Render(cleanProse(hl)), in), 2, in)...)
 		}
-		if c.r.NeedsYou > 0 || !hasSum {
+		if c.r.State == agents.OnHold {
+			if note := holdNoteFor(c.s, now); note != "" {
+				body = append(body, clamp(wrap(sMuted.Render("‖ "+cleanProse(note)), in), 2, in)...)
+			}
+		} else if c.r.NeedsYou > 0 || !hasSum {
 			if hl := m.headline(c.s); hl != "" {
 				body = append(body, clamp(wrap(hl, in), 2, in)...)
 			}
@@ -724,12 +799,17 @@ func (m Model) triage(r core.Rollup) string {
 	if r.Working > 0 {
 		working = sGreen.Render(fmt.Sprintf("● %d working", r.Working))
 	}
-	ready := sSubtle.Render("✓ 0 ready")
+	ready := sSubtle.Render("✓ 0 follow up")
 	if r.Ready > 0 {
-		ready = sCyan.Render(fmt.Sprintf("✓ %d ready", r.Ready))
+		ready = sCyan.Render(fmt.Sprintf("✓ %d follow up", r.Ready))
 	}
-	quiet := sSubtle.Render(fmt.Sprintf("○ %d quiet", r.Total-r.NeedsYou-r.Working-r.Ready))
-	return needs + "   " + working + "   " + ready + "   " + quiet
+	parts := []string{needs, working, ready}
+	if r.OnHold > 0 {
+		parts = append(parts, sMuted.Render(fmt.Sprintf("‖ %d on hold", r.OnHold)))
+	}
+	quietN := r.Total - r.NeedsYou - r.Working - r.Ready - r.OnHold
+	parts = append(parts, sSubtle.Render(fmt.Sprintf("○ %d quiet", quietN)))
+	return strings.Join(parts, "   ")
 }
 
 // headline is the single most useful line about a group of sessions.
@@ -905,14 +985,29 @@ func (m Model) viewProject(w int, sc sideItem) page {
 	}
 	lines = nil
 
+	var held []core.Session
 	quiet := 0
 	for _, s := range ss {
-		if st := s.State(now); st == agents.Quiet || st == agents.Ended || st == agents.Unknown {
+		switch s.State(now) {
+		case agents.OnHold:
+			held = append(held, s)
+		case agents.Quiet, agents.Ended, agents.Unknown:
 			quiet++
 		}
 	}
+	if len(held) > 0 {
+		lines = append(lines, "", sSubtle.Bold(true).Render("ON HOLD")+"  "+sSubtle.Render("x resumes · X edits note"))
+		for _, s := range held {
+			age := core.Ago(s.Info.UpdatedAt, now)
+			left := sMuted.Render("‖ ") + sMuted.Render(s.Title())
+			if s.HoldReason != "" {
+				left += sSubtle.Render(" · " + cleanProse(s.HoldReason))
+			}
+			lines = append(lines, spread(left, sSubtle.Render(age), w))
+		}
+	}
 	if quiet > 0 {
-		lines = append(lines, "", sSubtle.Render("○ "+plural(quiet, "quiet session")+" (nothing new in the last day)"))
+		lines = append(lines, "", sSubtle.Render("○ "+plural(quiet, "quiet session")+" (nothing new in a week)"))
 	}
 	pg.add(lines...)
 	return pg
@@ -950,7 +1045,7 @@ func (m Model) happeningCard(w int, pid string, threadOnly bool, ss []core.Sessi
 			body = append(body, "", sLine.Render(strings.Repeat("─", in)), sSubtle.Render("Sessions"))
 			for _, s := range ss {
 				st := s.State(now)
-				if st == agents.Quiet || st == agents.Ended || st == agents.Unknown {
+				if st == agents.OnHold || st == agents.Quiet || st == agents.Ended || st == agents.Unknown {
 					continue
 				}
 				body = append(body, spread(dot(st)+" "+sBold.Render(trunc(s.Title(), in-12)), sSubtle.Render(core.Ago(s.Info.UpdatedAt, now)), in))
@@ -968,7 +1063,7 @@ func (m Model) happeningCard(w int, pid string, threadOnly bool, ss []core.Sessi
 			if !threadOnly && st != agents.Working {
 				continue
 			}
-			if threadOnly && (st == agents.Quiet || st == agents.Ended || st == agents.Unknown) {
+			if threadOnly && (st == agents.OnHold || st == agents.Quiet || st == agents.Ended || st == agents.Unknown) {
 				continue
 			}
 			right := sSubtle.Render(core.Ago(s.Info.UpdatedAt, now))
@@ -1071,6 +1166,13 @@ func (m Model) workInMotion(w int, p *store.Project, sc sideItem, ss []core.Sess
 			}
 			it := item{title: t.Name, meta: meta, state: tr.State, ref: cardRef{id: "thread:" + t.ID, kind: cardThread, pid: p.ID, tid: t.ID}}
 			core.SortSessions(ts, now)
+			if tr.State == agents.OnHold {
+				if note := holdNoteFor(ts, now); note != "" {
+					it.status = "On hold: " + note
+				} else {
+					it.status = "On hold"
+				}
+			}
 			for _, s := range ts {
 				if it.status == "" {
 					it.status = m.status1(s)
@@ -1263,6 +1365,12 @@ func (m Model) buildSessionRows(w, maxRows int) ([]string, int, []int) {
 		}
 		return []string{sSubtle.Render("No sessions here.")}, 0, []int{-1}
 	}
+	showRnu := m.showRelativeNumbers() && m.focus == focusSessions && m.mode == modeNormal
+	prefixW := 2
+	if showRnu {
+		prefixW = 3
+	}
+	inner := w - prefixW
 	var rows []string
 	var rowIdx []int
 	selRow := 0
@@ -1274,16 +1382,19 @@ func (m Model) buildSessionRows(w, maxRows int) ([]string, int, []int) {
 			titleStyle = sBold
 		}
 		// Put the status dot beside the title so status and name scan in one fixation.
-		one := spread(dot(st)+" "+titleStyle.Render(trunc(s.Title(), w-6-len(age))), sSubtle.Render(age), w-2)
+		one := spread(dot(st)+" "+titleStyle.Render(trunc(s.Title(), inner-4-len(age))), sSubtle.Render(age), inner)
 		stWord := stateWord(st)
 		if st == agents.Working && s.Info.Scheduled != "" {
 			stWord += sSubtle.Render(" · " + s.Info.Scheduled)
 		}
 		meta := stWord + sSubtle.Render(" · "+agentName(s.Kind)+" · "+s.Pane.Target())
+		if st == agents.OnHold && s.HoldReason != "" {
+			meta = stWord + sSubtle.Render(" · "+cleanProse(s.HoldReason))
+		}
 		if m.docked != "" && s.Pane.PaneID == m.docked {
 			meta = sTeal.Render("⇄ docked") + sSubtle.Render(" · ") + meta
 		}
-		two := "  " + trunc(meta, w-4)
+		two := "  " + trunc(meta, inner-2)
 		if i == m.sessIdx {
 			selRow = len(rows)
 			bg := cRaised
@@ -1292,7 +1403,13 @@ func (m Model) buildSessionRows(w, maxRows int) ([]string, int, []int) {
 				bg = cSelection
 				bar = sBlue.Render("▌")
 			}
-			rows = append(rows, paint(bar+" "+pad(one, w-2), bg), paint(bar+" "+pad(two, w-2), bg))
+			gap := " "
+			if showRnu {
+				gap = "  "
+			}
+			rows = append(rows, paint(bar+gap+pad(one, inner), bg), paint(bar+gap+pad(two, inner), bg))
+		} else if showRnu {
+			rows = append(rows, relNum(absInt(i-m.sessIdx))+" "+one, "   "+two)
 		} else {
 			rows = append(rows, "  "+one, "  "+two)
 		}
@@ -1383,6 +1500,14 @@ func (m Model) detailFor(s core.Session, w int, full bool) []string {
 		lines = append(lines, "")
 		lines = append(lines, clamp(wrap(sAmber.Render(cleanProse(s.Info.Reason)), w), 4, w)...)
 	}
+	if st == agents.OnHold {
+		if s.HoldReason != "" {
+			lines = append(lines, "", sKicker.Render("ON HOLD")+sSubtle.Render("  x resumes · X edits note"))
+			lines = append(lines, clamp(wrap(sMuted.Render(cleanProse(s.HoldReason)), w), 3, w)...)
+		} else {
+			lines = append(lines, "", sSubtle.Render("‖ On hold · x resumes · X adds a note"))
+		}
+	}
 	// Only show DOING when there is an actual summary distinct from the raw ask.
 	if doing := cleanProse(m.summaryDoing(s)); doing != "" {
 		lines = append(lines, "", sKicker.Render("DOING")+sSubtle.Render("  summary"))
@@ -1443,9 +1568,17 @@ func (m Model) viewOrganize(w int) []string {
 		} else if !assigned && hasSug && o.pid == sg.Project && o.tid == sg.Thread && !o.newProj && !o.unassign {
 			tag = sCyan.Render("  suggested")
 		}
+		showRnu := m.showRelativeNumbers()
 		row := "  " + label + tag
+		if showRnu && i != m.orgIdx {
+			row = relNum(absInt(i-m.orgIdx)) + " " + label + tag
+		}
 		if i == m.orgIdx {
-			row = paint(pad(sBlue.Render("▌ ")+label+tag, w), cSelection)
+			prefix := "▌ "
+			if showRnu {
+				prefix = "▌  "
+			}
+			row = paint(pad(sBlue.Render(prefix)+label+tag, w), cSelection)
 		}
 		lines = append(lines, row)
 	}
@@ -1458,11 +1591,11 @@ func (m Model) viewHelp(w int) []string {
 		title string
 		keys  [][2]string
 	}{
-		{"MOVE", [][2]string{{"j / k", "down / up (supports counts, e.g. 10j, 5k)"}, {"gg / G", "top / bottom, or {count}G to jump to item N"}, {"h / l", "move between panels (also tab)"}, {"ctrl-h/j/k/l", "panels, then the tmux pane past the edge"}, {"j / k (middle)", "step through cards; enter opens or expands, esc collapses"}, {"space e / l / z", "toggle projects panel / sessions panel / both"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"ctrl-d / ctrl-u", "scroll the middle pane (ctrl-e / ctrl-y a line, supports count)"}}},
-		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"i", "type to the session without leaving"}, {"v / V", "dock the session's terminal beside Switchboard / undock from anywhere"}, {"p / P", "park this session / all agent windows in the background agents session"}, {"o", "start Copilot in this project or thread (opens in agents)"}, {"y", "copy how to reach the highlighted machine or cluster"}, {"s", "open a shell on it in a new tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
+		{"MOVE", [][2]string{{"j / k", "down / up (supports counts, e.g. 10j, 5k)"}, {"gg / G", "top / bottom, or {count}G to jump to item N"}, {"h / l", "move between panels (also tab)"}, {"ctrl-h/j/k/l", "panels, then the tmux pane past the edge"}, {"j / k (middle)", "step through cards; enter opens or expands, esc collapses"}, {"space e / l / z", "toggle projects panel / sessions panel / both"}, {"space #", "toggle dim relative line numbers in the focused panel"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"ctrl-d / ctrl-u", "scroll the middle pane (ctrl-e / ctrl-y a line, supports count)"}}},
+		{"ACT", [][2]string{{"enter", "jump to the session's tmux window"}, {"i", "type to the session without leaving"}, {"v / V", "dock the session's terminal beside Switchboard / undock from anywhere"}, {"x / X", "hold or resume finished work / hold with a reason note (auto-wakes on activity)"}, {"p / P", "park this session / all agent windows in the background agents session"}, {"o", "start Copilot in this project or thread (opens in agents)"}, {"y", "copy how to reach the highlighted machine or cluster"}, {"s", "open a shell on it in a new tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
 		{"PROJECTS", [][2]string{{"n", "new project"}, {"t", "new thread in this project"}, {"e", "describe what the project is for"}, {"r", "rename project or thread"}, {"d", "delete project or thread"}}},
-		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":undock", "send the docked session back to its window"}, {":park / :park-all", "move one / all agent windows to the agents tmux session"}, {":help", "this screen"}}},
-		{"COLORS", [][2]string{{sAmber.Render("●"), "needs you: a question or approval is waiting"}, {sGreen.Render("●"), "working"}, {sCyan.Render("✓"), "finished and ready for your next instruction"}, {sSubtle.Render("○"), "quiet: nothing new in a day"}, {sNewTag.Render("new"), "finished since you last opened the project"}}},
+		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":hold [note]", "put the selected session, thread, or project on hold"}, {":resume", "clear hold on the selected session, thread, or project"}, {":rnu / :nornu", "toggle or hide relative line numbers (also :set rnu / :set rnu!)"}, {":undock", "send the docked session back to its window"}, {":park / :park-all", "move one / all agent windows to the agents tmux session"}, {":help", "this screen"}}},
+		{"COLORS", [][2]string{{sAmber.Render("●"), "needs you: a question or approval is waiting"}, {sGreen.Render("●"), "working"}, {sCyan.Render("✓"), "follow up: active work that finished a turn and needs you"}, {sMuted.Render("‖"), "on hold: parked for later or blocked (auto-wakes when it runs again)"}, {sSubtle.Render("○"), "quiet: nothing new in a week"}, {sNewTag.Render("new"), "finished since you last opened the project"}}},
 	}
 	lines := []string{"", sKicker.Render("HELP"), sTitle.Render("Keys"), ""}
 	const kw = 18

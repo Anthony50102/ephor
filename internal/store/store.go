@@ -40,11 +40,20 @@ type Assignment struct {
 	At      time.Time `json:"at"`
 }
 
+// Hold marks a finished session as parked, done for now, or waiting on
+// something external. Newer agent activity after At automatically wakes it.
+type Hold struct {
+	At     time.Time `json:"at"`
+	Reason string    `json:"reason,omitempty"`
+}
+
 // State is the whole persisted file.
 type State struct {
-	Version  int                   `json:"version"`
-	Projects []Project             `json:"projects"`
-	Assign   map[string]Assignment `json:"assignments"`
+	Version           int                   `json:"version"`
+	Projects          []Project             `json:"projects"`
+	Assign            map[string]Assignment `json:"assignments"`
+	Holds             map[string]Hold       `json:"holds,omitempty"`
+	NoRelativeNumbers bool                  `json:"noRelativeNumbers,omitempty"`
 }
 
 // DefaultPath is $XDG_STATE_HOME/switchboard/state.json or ~/.local/state/switchboard/state.json.
@@ -60,7 +69,7 @@ func DefaultPath() string {
 // Load reads state. A missing file is an empty state; a corrupt file is an
 // error so Switchboard never overwrites groupings it could not read.
 func Load(path string) (*State, error) {
-	s := &State{Version: version, Assign: map[string]Assignment{}}
+	s := &State{Version: version, Assign: map[string]Assignment{}, Holds: map[string]Hold{}}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -76,6 +85,9 @@ func Load(path string) (*State, error) {
 	}
 	if s.Assign == nil {
 		s.Assign = map[string]Assignment{}
+	}
+	if s.Holds == nil {
+		s.Holds = map[string]Hold{}
 	}
 	return s, nil
 }
@@ -162,6 +174,19 @@ func (s *State) AssignSession(key, pid, tid, label string, now time.Time) {
 		return
 	}
 	s.Assign[key] = Assignment{Project: pid, Thread: tid, Label: label, At: now}
+}
+
+// SetHold puts a session on hold with an optional reason.
+func (s *State) SetHold(key string, at time.Time, reason string) {
+	if s.Holds == nil {
+		s.Holds = map[string]Hold{}
+	}
+	s.Holds[key] = Hold{At: at, Reason: strings.TrimSpace(reason)}
+}
+
+// ClearHold removes a session's hold.
+func (s *State) ClearHold(key string) {
+	delete(s.Holds, key)
 }
 
 // DeleteProject removes a project and unassigns its sessions.

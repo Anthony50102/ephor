@@ -63,6 +63,7 @@ const (
 	inLaunchDir
 	inLaunchTask
 	inReply
+	inHoldReason
 )
 
 type orgOpt struct {
@@ -324,6 +325,7 @@ func (m *Model) change(fn func(*store.State) error) bool {
 			m.setErr(err)
 			return false
 		}
+		core.ApplyHolds(m.sessions, m.st.Holds)
 		return true
 	}
 	st, err := store.Update(m.opt.StatePath, fn)
@@ -333,6 +335,7 @@ func (m *Model) change(fn func(*store.State) error) bool {
 	}
 	m.st = st
 	m.stamp = store.Stamp(m.opt.StatePath)
+	core.ApplyHolds(m.sessions, m.st.Holds)
 	m.rebuildSide()
 	return true
 }
@@ -352,6 +355,7 @@ func (m *Model) reload() {
 		return
 	}
 	m.st, m.stamp = st, stamp
+	core.ApplyHolds(m.sessions, m.st.Holds)
 	m.rebuildSide()
 }
 
@@ -522,8 +526,14 @@ func (m Model) newCount(p store.Project) int {
 	if p.ID == m.viewedPID {
 		return 0
 	}
+	var active []core.Session
+	for _, s := range m.sessionsIn(sideItem{kind: sideProject, pid: p.ID}) {
+		if !s.Held {
+			active = append(active, s)
+		}
+	}
 	n := 0
-	for _, it := range core.RecentResults(m.sessionsIn(sideItem{kind: sideProject, pid: p.ID}), 20) {
+	for _, it := range core.RecentResults(active, 20) {
 		if it.At.After(p.LastViewed) {
 			n++
 		}
@@ -547,6 +557,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessions = msg.ss
 		}
 		m.reload()
+		core.ApplyHolds(m.sessions, m.st.Holds)
 		m.syncSelection()
 		m.dockGone()
 		if m.wantKey != "" {
@@ -909,6 +920,9 @@ func (m Model) inputPrompt() string {
 		return "First task (optional, enter to skip)"
 	case inReply:
 		return "Type to " + m.replyTitle
+	case inHoldReason:
+		label := m.holdPromptLabel()
+		return "Hold note for " + label + " (optional, enter to save)"
 	}
 	return ""
 }
@@ -1007,6 +1021,289 @@ func (m *Model) commitInput(v string) {
 			return nil
 		})
 		m.rebuildSide()
+	case inHoldReason:
+		m.commitHoldNote(v)
+	}
+	m.syncSelection()
+}
+
+// ---- relative line numbers ----
+
+func (m Model) showRelativeNumbers() bool {
+	return m.st == nil || !m.st.NoRelativeNumbers
+}
+
+func (m *Model) setRelativeNumbers(on bool) {
+	wantOff := !on
+	m.change(func(st *store.State) error {
+		st.NoRelativeNumbers = wantOff
+		return nil
+	})
+	if on {
+		m.setStatus("Relative line numbers on (space # or :nornu to hide)")
+	} else {
+		m.setStatus("Relative line numbers off (space # or :rnu to show)")
+	}
+}
+
+func (m *Model) toggleRelativeNumbers() {
+	m.setRelativeNumbers(!m.showRelativeNumbers())
+}
+
+// ---- holds ----
+
+type holdTarget struct {
+	label    string
+	pid, tid string
+	key      string
+	sessions []core.Session
+}
+
+func (m Model) holdTargetFor() (holdTarget, bool) {
+	sc := m.scope()
+	if m.focus == focusCenter {
+		switch {
+		case strings.HasPrefix(m.cardID, "proj:"):
+			pid := strings.TrimPrefix(m.cardID, "proj:")
+			if m.st.Project(pid) != nil {
+				return holdTarget{label: m.placeName(pid, ""), pid: pid, sessions: m.sessionsIn(sideItem{kind: sideProject, pid: pid})}, true
+			}
+		case strings.HasPrefix(m.cardID, "thread:"):
+			tid := strings.TrimPrefix(m.cardID, "thread:")
+			if p := m.st.Project(sc.pid); p != nil && p.Thread(tid) != nil {
+				return holdTarget{label: m.placeName(sc.pid, tid), pid: sc.pid, tid: tid, sessions: m.sessionsIn(sideItem{kind: sideThread, pid: sc.pid, tid: tid})}, true
+			}
+		case strings.HasPrefix(m.cardID, "sess:"), strings.HasPrefix(m.cardID, "needs:"):
+			key := strings.TrimPrefix(strings.TrimPrefix(m.cardID, "sess:"), "needs:")
+			if s, ok := m.sessionByKey(key); ok {
+				return holdTarget{label: s.Title(), key: s.Key, sessions: []core.Session{s}}, true
+			}
+		}
+	}
+	if m.focus == focusSide || (m.focus == focusCenter && (sc.kind == sideProject || sc.kind == sideThread)) {
+		if sc.kind == sideProject || sc.kind == sideThread {
+			return holdTarget{label: m.placeName(sc.pid, sc.tid), pid: sc.pid, tid: sc.tid, sessions: m.sessionsIn(sc)}, true
+		}
+	}
+	if s, ok := m.selected(); ok {
+		return holdTarget{label: s.Title(), key: s.Key, sessions: []core.Session{s}}, true
+	}
+	return holdTarget{}, false
+}
+
+func (m Model) holdPromptLabel() string {
+	if m.inputKey != "" {
+		if s, ok := m.sessionByKey(m.inputKey); ok {
+			return s.Title()
+		}
+	}
+	if m.inputPID != "" {
+		return m.placeName(m.inputPID, m.inputTID)
+	}
+	return "selection"
+}
+
+func (m Model) holdTargetFromInput() (holdTarget, bool) {
+	if m.inputKey != "" {
+		if s, ok := m.sessionByKey(m.inputKey); ok {
+			return holdTarget{label: s.Title(), key: s.Key, sessions: []core.Session{s}}, true
+		}
+		return holdTarget{}, false
+	}
+	if m.inputPID != "" {
+		sc := sideItem{kind: sideProject, pid: m.inputPID}
+		if m.inputTID != "" {
+			sc = sideItem{kind: sideThread, pid: m.inputPID, tid: m.inputTID}
+		}
+		return holdTarget{label: m.placeName(m.inputPID, m.inputTID), pid: m.inputPID, tid: m.inputTID, sessions: m.sessionsIn(sc)}, true
+	}
+	return holdTarget{}, false
+}
+
+func (m Model) partitionHold(ss []core.Session) (holdable, held, active []core.Session) {
+	for _, s := range ss {
+		switch s.Info.State {
+		case agents.Working, agents.NeedsYou:
+			active = append(active, s)
+		case agents.Ready, agents.Quiet:
+			if s.Held {
+				held = append(held, s)
+			} else {
+				holdable = append(holdable, s)
+			}
+		}
+	}
+	return holdable, held, active
+}
+
+func holdStamp(s core.Session, now time.Time) time.Time {
+	if s.Info.UpdatedAt.After(now) {
+		return s.Info.UpdatedAt
+	}
+	return now
+}
+
+// pruneWokenHolds removes persisted holds whose live sessions have already woken up.
+func (m Model) pruneWokenHolds(st *store.State) {
+	for _, s := range m.sessions {
+		h, ok := st.Holds[s.Key]
+		if !ok {
+			continue
+		}
+		if s.Info.State == agents.NeedsYou || s.Info.State == agents.Working || (!s.Info.UpdatedAt.IsZero() && s.Info.UpdatedAt.After(h.At)) {
+			st.ClearHold(s.Key)
+		}
+	}
+}
+
+func (m *Model) toggleHold() {
+	tgt, ok := m.holdTargetFor()
+	if !ok {
+		m.setStatus("Select a project, thread, or session first.")
+		return
+	}
+	holdable, held, active := m.partitionHold(tgt.sessions)
+	now := m.opt.Now()
+	switch {
+	case len(holdable) > 0:
+		if !m.change(func(st *store.State) error {
+			m.pruneWokenHolds(st)
+			for _, s := range holdable {
+				st.SetHold(s.Key, holdStamp(s, now), "")
+			}
+			return nil
+		}) {
+			return
+		}
+		if len(holdable) == 1 && tgt.key != "" {
+			m.setStatus(fmt.Sprintf("On hold: %s (X to add a note, x to resume)", holdable[0].Title()))
+		} else {
+			msg := fmt.Sprintf("Put %s on hold in %s (X to add a note)", plural(len(holdable), "session"), tgt.label)
+			if len(active) > 0 {
+				msg += fmt.Sprintf(" · %d still active", len(active))
+			}
+			m.setStatus(msg)
+		}
+		m.syncSelection()
+	case len(held) > 0:
+		if !m.change(func(st *store.State) error {
+			m.pruneWokenHolds(st)
+			for _, s := range held {
+				st.ClearHold(s.Key)
+			}
+			return nil
+		}) {
+			return
+		}
+		if len(held) == 1 && tgt.key != "" {
+			m.setStatus("Resumed " + held[0].Title())
+		} else {
+			m.setStatus(fmt.Sprintf("Resumed %s in %s", plural(len(held), "session"), tgt.label))
+		}
+		m.syncSelection()
+	case len(active) > 0:
+		m.setStatus("Still active - you can put it on hold once it finishes.")
+	default:
+		m.setStatus("No finished sessions here to put on hold.")
+	}
+}
+
+func (m *Model) startHoldNote() {
+	tgt, ok := m.holdTargetFor()
+	if !ok {
+		m.setStatus("Select a project, thread, or session first.")
+		return
+	}
+	holdable, held, active := m.partitionHold(tgt.sessions)
+	eligible := append(holdable, held...)
+	if len(eligible) == 0 {
+		if len(active) > 0 {
+			m.setStatus("Still active - you can put it on hold once it finishes.")
+		} else {
+			m.setStatus("No finished sessions here to put on hold.")
+		}
+		return
+	}
+	existing := ""
+	for _, s := range held {
+		if s.HoldReason != "" {
+			existing = s.HoldReason
+			break
+		}
+	}
+	m.startInput(inHoldReason, tgt.pid, tgt.tid, tgt.key, existing)
+}
+
+func (m *Model) holdWithReason(reason string) {
+	tgt, ok := m.holdTargetFor()
+	if !ok {
+		m.setStatus("Select a project, thread, or session first.")
+		return
+	}
+	m.applyHoldTarget(tgt, reason)
+}
+
+func (m *Model) commitHoldNote(reason string) {
+	tgt, ok := m.holdTargetFromInput()
+	if !ok {
+		return
+	}
+	m.applyHoldTarget(tgt, reason)
+}
+
+func (m *Model) applyHoldTarget(tgt holdTarget, reason string) {
+	holdable, held, active := m.partitionHold(tgt.sessions)
+	eligible := append(holdable, held...)
+	if len(eligible) == 0 {
+		if len(active) > 0 {
+			m.setStatus("Still active - you can put it on hold once it finishes.")
+		} else {
+			m.setStatus("No finished sessions here to put on hold.")
+		}
+		return
+	}
+	now := m.opt.Now()
+	reason = strings.TrimSpace(reason)
+	if !m.change(func(st *store.State) error {
+		m.pruneWokenHolds(st)
+		for _, s := range eligible {
+			st.SetHold(s.Key, holdStamp(s, now), reason)
+		}
+		return nil
+	}) {
+		return
+	}
+	if reason != "" {
+		m.setStatus(fmt.Sprintf("On hold (%s): %s", reason, tgt.label))
+	} else {
+		m.setStatus(fmt.Sprintf("On hold: %s (x to resume)", tgt.label))
+	}
+}
+
+func (m *Model) resumeHold() {
+	tgt, ok := m.holdTargetFor()
+	if !ok {
+		m.setStatus("Select a project, thread, or session first.")
+		return
+	}
+	_, held, _ := m.partitionHold(tgt.sessions)
+	if len(held) == 0 {
+		m.setStatus("Nothing is on hold here.")
+		return
+	}
+	if !m.change(func(st *store.State) error {
+		m.pruneWokenHolds(st)
+		for _, s := range held {
+			st.ClearHold(s.Key)
+		}
+		return nil
+	}) {
+		return
+	}
+	if len(held) == 1 && tgt.key != "" {
+		m.setStatus("Resumed " + held[0].Title())
+	} else {
+		m.setStatus(fmt.Sprintf("Resumed %s in %s", plural(len(held), "session"), tgt.label))
 	}
 	m.syncSelection()
 }

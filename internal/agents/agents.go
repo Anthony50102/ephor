@@ -18,7 +18,8 @@ const (
 	Unknown  State = iota
 	Ended          // process gone or session shut down
 	Quiet          // finished, and nothing has happened for a long time
-	Ready          // finished a turn; waiting for the next instruction
+	OnHold         // parked / done for now / waiting on something else
+	Ready          // active: finished a turn and waiting for your follow-up
 	Working        // a turn is in progress
 	NeedsYou       // blocked on a question or permission prompt
 )
@@ -29,8 +30,10 @@ func (s State) String() string {
 		return "ended"
 	case Quiet:
 		return "quiet"
+	case OnHold:
+		return "on hold"
 	case Ready:
-		return "ready"
+		return "follow up"
 	case Working:
 		return "working"
 	case NeedsYou:

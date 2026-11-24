@@ -54,7 +54,8 @@ var (
 )
 
 // Color meaning is fixed: amber means it needs you, green means moving,
-// cyan means finished and ready for you, hollow means quiet.
+// cyan means finished and awaiting your follow-up, muted pause bars mean
+// parked / on hold, hollow means quiet.
 func stateColor(s agents.State) lipgloss.Style {
 	switch s {
 	case agents.NeedsYou:
@@ -63,6 +64,8 @@ func stateColor(s agents.State) lipgloss.Style {
 		return sGreen
 	case agents.Ready:
 		return sCyan
+	case agents.OnHold:
+		return sMuted
 	}
 	return sSubtle
 }
@@ -73,6 +76,8 @@ func dot(s agents.State) string {
 		return stateColor(s).Render("●")
 	case agents.Ready:
 		return stateColor(s).Render("✓")
+	case agents.OnHold:
+		return stateColor(s).Render("‖")
 	case agents.Unknown:
 		return sSubtle.Render("?")
 	}
