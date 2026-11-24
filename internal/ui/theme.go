@@ -78,6 +78,8 @@ func dot(s agents.State) string {
 		return stateColor(s).Render("✓")
 	case agents.OnHold:
 		return stateColor(s).Render("‖")
+	case agents.Offline:
+		return sSubtle.Render("◌")
 	case agents.Unknown:
 		return sSubtle.Render("?")
 	}

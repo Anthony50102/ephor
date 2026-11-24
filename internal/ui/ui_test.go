@@ -1321,3 +1321,118 @@ func TestHoldAndFollowUpWorkflow(t *testing.T) {
 		t.Fatal(":resume should clear the hold")
 	}
 }
+
+func TestOfflineRestoreAndDismissWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	snapPath := filepath.Join(dir, "snapshot.json")
+
+	offActive := core.Session{
+		Key:     "copilot:11111111-aaaa-bbbb-cccc-000000000001",
+		Kind:    "copilot",
+		Pane:    tmux.Pane{WindowName: "nabu", Path: dir},
+		Info:    agents.Info{Kind: "copilot", ID: "11111111-aaaa-bbbb-cccc-000000000001", Name: "pt train", Cwd: dir, State: agents.Offline, UpdatedAt: now.Add(-2 * time.Hour)},
+		Offline: true,
+	}
+	offActive2 := core.Session{
+		Key:     "claude:22222222-aaaa-bbbb-cccc-000000000002",
+		Kind:    "claude",
+		Pane:    tmux.Pane{WindowName: "eval", Path: dir},
+		Info:    agents.Info{Kind: "claude", ID: "22222222-aaaa-bbbb-cccc-000000000002", Name: "eval runner", Cwd: dir, State: agents.Offline, UpdatedAt: now.Add(-3 * time.Hour)},
+		Offline: true,
+	}
+	offHeld := core.Session{
+		Key:     "copilot:33333333-aaaa-bbbb-cccc-000000000003",
+		Kind:    "copilot",
+		Pane:    tmux.Pane{WindowName: "docs", Path: dir},
+		Info:    agents.Info{Kind: "copilot", ID: "33333333-aaaa-bbbb-cccc-000000000003", Name: "docs cleanup", Cwd: dir, State: agents.Offline, UpdatedAt: now.Add(-4 * time.Hour)},
+		Offline: true,
+	}
+	snap := &store.Snapshot{
+		ServerID: "200:1700009999",
+		Recoverable: []store.SavedSession{
+			{Key: offActive.Key, Kind: offActive.Kind, ID: offActive.Info.ID, Title: offActive.Info.Name, WindowName: "nabu", Cwd: dir, SeenAt: offActive.Info.UpdatedAt},
+			{Key: offActive2.Key, Kind: offActive2.Kind, ID: offActive2.Info.ID, Title: offActive2.Info.Name, WindowName: "eval", Cwd: dir, SeenAt: offActive2.Info.UpdatedAt},
+			{Key: offHeld.Key, Kind: offHeld.Kind, ID: offHeld.Info.ID, Title: offHeld.Info.Name, WindowName: "docs", Cwd: dir, SeenAt: offHeld.Info.UpdatedAt},
+		},
+	}
+	if err := snap.Save(snapPath); err != nil {
+		t.Fatal(err)
+	}
+
+	var launched []LaunchReq
+	var docked []string
+	var shown []string
+	paneSeq := 0
+
+	h := newHarness(t, []core.Session{offActive, offActive2, offHeld}, true)
+	h.m.opt.SnapshotPath = snapPath
+	h.m.opt.Launch = func(r LaunchReq) (string, error) {
+		launched = append(launched, r)
+		paneSeq++
+		return fmt.Sprintf("%%9%d", paneSeq), nil
+	}
+	h.m.opt.Dock = func(paneID string) error { docked = append(docked, paneID); return nil }
+	h.m.opt.Undock = func(paneID string) error { return nil }
+	h.m.opt.Show = func(paneID string) error { shown = append(shown, paneID); return nil }
+	h.m.opt.Summarize = func(ctx context.Context, prompt string) (string, error) {
+		t.Fatal("maybeSummarize must not auto-summarize offline-only projects")
+		return "", nil
+	}
+	h.m.change(func(st *store.State) error {
+		p, _ := st.AddProject("Nabu", now)
+		st.AssignSession(offActive.Key, p.ID, "", "", now)
+		st.AssignSession(offActive2.Key, p.ID, "", "", now)
+		st.AssignSession(offHeld.Key, p.ID, "", "", now)
+		st.SetHold(offHeld.Key, now, "next sprint")
+		return nil
+	})
+	if cmd := h.m.maybeSummarize(); cmd != nil {
+		t.Fatal("offline-only project should not queue a summary rewrite")
+	}
+
+	// Offline glyph is single-width and Overview displays the RECOVERABLE card.
+	if w := ansi.StringWidth("◌"); w != 1 {
+		t.Fatalf("offline glyph width = %d, want 1", w)
+	}
+	h.mustSee("RECOVERABLE", "3 offline", "pt train", "docs cleanup", "next sprint")
+
+	// Pressing v on an offline session resumes it in agents and immediately docks it.
+	h.m.focus = focusSessions
+	h.m.syncSelectionTo(offActive.Key)
+	h.keys("v")
+	if len(launched) != 1 || launched[0].Session != tmux.PoolSession || launched[0].Command != "copilot --resume=11111111-aaaa-bbbb-cccc-000000000001" {
+		t.Fatalf("unexpected v launch: %+v", launched)
+	}
+	if len(docked) != 1 || docked[0] != "%91" || h.m.docked != "%91" {
+		t.Fatalf("expected restored pane to be docked, docked=%v m.docked=%q", docked, h.m.docked)
+	}
+
+	// Pressing R on Overview restores remaining active offline sessions and skips the held one.
+	h.m.focus = focusSide
+	h.keys("R")
+	if len(launched) != 2 || launched[1].Command != "claude --resume 22222222-aaaa-bbbb-cccc-000000000002" {
+		t.Fatalf("R should restore only active offline session eval runner, got %+v", launched)
+	}
+	h.mustSee("Skipped 1 on hold")
+
+	// Pressing d while focused on the remaining held offline session dismisses it from recovery.
+	h.m.focus = focusSessions
+	h.m.syncSelectionTo(offHeld.Key)
+	h.keys("d")
+	loaded, err := store.LoadSnapshot(snapPath)
+	if err != nil || len(loaded.Recoverable) != 0 {
+		t.Fatalf("expected snapshot Recoverable empty after restore+dismiss, got %+v err=%v", loaded.Recoverable, err)
+	}
+	if len(h.m.st.Projects) != 1 {
+		t.Fatal("dismissing an offline session must not delete its project")
+	}
+
+	// Pressing enter on an offline session resumes and jumps to it via Show.
+	h.m.sessions = []core.Session{offActive}
+	h.m.syncSelectionTo(offActive.Key)
+	h.m.focus = focusSessions
+	h.keys("enter")
+	if len(shown) != 1 || shown[0] != "%93" {
+		t.Fatalf("enter on offline session should jump via Show, got %v", shown)
+	}
+}

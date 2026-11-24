@@ -176,3 +176,82 @@ func TestHoldAutoWakesOnActivity(t *testing.T) {
 		t.Fatalf("held-quiet = %v reason=%q, want on hold", ss[3].State(now), ss[3].HoldReason)
 	}
 }
+
+func TestDiscoverWithSnapshotAndResume(t *testing.T) {
+	dir := t.TempDir()
+	snapPath := filepath.Join(dir, "snapshot.json")
+	copilotDir := filepath.Join(dir, "copilot")
+	sessDir := filepath.Join(copilotDir, "11111111-2222-3333-4444-555555555555")
+	if err := os.MkdirAll(sessDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(sessDir, "workspace.yaml"), []byte("name: pt train\ncwd: "+dir+"\nrepository: org/nabu\nbranch: main\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(sessDir, "events.jsonl"), []byte(`{"type":"user.message","timestamp":"2026-11-24T10:00:00Z","data":{"content":"run training"}}`+"\n"+
+		`{"type":"assistant.turn_end","timestamp":"2026-11-24T10:05:00Z","data":{}}`+"\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(sessDir, "inuse.501.lock"), nil, 0o600)
+
+	now := time.Date(2026, 11, 24, 11, 0, 0, 0, time.UTC)
+	serverID := "111:1700000001"
+	paneLine := "$1\x1fagents\x1f@1\x1f1\x1fnabu\x1f%1\x1f500\x1fcopilot\x1f" + dir + "\x1f1700000010\x1f1\x1f1\n"
+	panesOut := paneLine
+	psOut := "500 1 zsh\n501 500 copilot\n"
+
+	src := Sources{
+		Tmux: tmux.Client{Run: func(args ...string) (string, error) {
+			if len(args) > 0 && args[0] == "display-message" {
+				return serverID + "\n", nil
+			}
+			return panesOut, nil
+		}},
+		Procs:   func() (procs.Table, error) { return procs.Parse(psOut), nil },
+		Copilot: &agents.Copilot{Dir: copilotDir},
+		Claude:  &agents.Claude{Dir: filepath.Join(dir, "claude")},
+	}
+
+	// First discovery on server A captures the live session in snapshot.json.
+	ss, err := DiscoverWithSnapshot(src, snapPath, now)
+	if err != nil || len(ss) != 1 || ss[0].Offline {
+		t.Fatalf("live discover = %+v err=%v", ss, err)
+	}
+
+	// Simulate reboot: new tmux server ID and no live agent panes.
+	serverID = "222:1700009999"
+	panesOut = "$1\x1f0\x1f@1\x1f0\x1fzsh\x1f%1\x1f900\x1fzsh\x1f" + dir + "\x1f1700009999\x1f1\x1f1\n"
+	psOut = "900 1 zsh\n"
+
+	ss, err = DiscoverWithSnapshot(src, snapPath, now.Add(time.Hour))
+	if err != nil || len(ss) != 1 {
+		t.Fatalf("post-reboot discover = %+v err=%v", ss, err)
+	}
+	if !ss[0].Offline || ss[0].State(now.Add(time.Hour)) != agents.Offline {
+		t.Fatalf("expected offline session, got offline=%v state=%v", ss[0].Offline, ss[0].State(now.Add(time.Hour)))
+	}
+	if ss[0].Title() != "pt train" || ss[0].Info.Ask != "run training" || ss[0].Pane.WindowName != "nabu" {
+		t.Fatalf("hydrated offline session missing metadata: %+v", ss[0])
+	}
+
+	// Holds still attach to offline sessions so bulk restore can skip parked work.
+	ApplyHolds(ss, map[string]store.Hold{
+		ss[0].Key: {At: now, Reason: "waiting on GPU"},
+	})
+	if !ss[0].Held || ss[0].HoldReason != "waiting on GPU" {
+		t.Fatalf("expected hold preserved on offline session: held=%v reason=%q", ss[0].Held, ss[0].HoldReason)
+	}
+	if r := Roll(ss, now.Add(time.Hour)); r.Offline != 1 || r.State != agents.Offline {
+		t.Fatalf("offline rollup = %+v", r)
+	}
+
+	// Resume helpers produce valid CLI commands and window names.
+	if got := ResumeCommand(procs.Copilot, "abc-123"); got != "copilot --resume=abc-123" {
+		t.Fatalf("copilot resume cmd = %q", got)
+	}
+	if got := ResumeCommand(procs.Claude, "def-456"); got != "claude --resume def-456" {
+		t.Fatalf("claude resume cmd = %q", got)
+	}
+	if got := ResumeWindowName(Session{Pane: tmux.Pane{WindowName: "zsh"}, Info: agents.Info{Name: "My Feature"}}); got != "my-feature" {
+		t.Fatalf("generic window fallback = %q, want my-feature", got)
+	}
+	if got := ResumeWindowName(Session{Pane: tmux.Pane{WindowName: "nabu"}, Info: agents.Info{Name: "pt train"}}); got != "nabu" {
+		t.Fatalf("custom window name = %q, want nabu", got)
+	}
+}

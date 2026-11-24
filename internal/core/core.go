@@ -24,7 +24,7 @@ const StaleAfter = 7 * 24 * time.Hour
 // before it ages out to quiet.
 const ScheduledStaleAfter = 24 * time.Hour
 
-// Session is one live agent in a tmux pane.
+// Session is one live or recoverable agent session.
 type Session struct {
 	// Key is the stable identity used for grouping. It is the agent's own
 	// session ID when known, because tmux windows get renumbered and reused.
@@ -35,6 +35,7 @@ type Session struct {
 	Info       agents.Info
 	Held       bool
 	HoldReason string
+	Offline    bool // saved from a previous tmux server; not running yet
 }
 
 // Title is the best short name for the session.
@@ -47,6 +48,9 @@ func (s Session) Title() string {
 
 // State is the session state with holds and staleness applied.
 func (s Session) State(now time.Time) agents.State {
+	if s.Offline {
+		return agents.Offline
+	}
 	st := s.Info.State
 	if st == agents.Working && s.Info.Scheduled != "" && !s.Info.UpdatedAt.IsZero() && now.Sub(s.Info.UpdatedAt) > ScheduledStaleAfter {
 		return agents.Quiet
@@ -61,8 +65,9 @@ func (s Session) State(now time.Time) agents.State {
 }
 
 // ApplyHolds attaches active user holds to sessions. A hold automatically
-// clears once the session is working, needs attention, or has activity newer
-// than when the hold was placed.
+// clears once a live session is working, needs attention, or has activity
+// newer than when the hold was placed. Offline sessions keep their hold marker
+// so bulk restore skips parked work.
 func ApplyHolds(ss []Session, holds map[string]store.Hold) {
 	for i := range ss {
 		ss[i].Held = false
@@ -71,7 +76,7 @@ func ApplyHolds(ss []Session, holds map[string]store.Hold) {
 		if !ok {
 			continue
 		}
-		if ss[i].Info.State == agents.NeedsYou || ss[i].Info.State == agents.Working {
+		if !ss[i].Offline && (ss[i].Info.State == agents.NeedsYou || ss[i].Info.State == agents.Working) {
 			continue
 		}
 		if !ss[i].Info.UpdatedAt.IsZero() && ss[i].Info.UpdatedAt.After(h.At) {
@@ -203,6 +208,7 @@ type Rollup struct {
 	Working   int
 	Ready     int
 	OnHold    int
+	Offline   int
 	Total     int
 	UpdatedAt time.Time
 }
@@ -222,6 +228,8 @@ func Roll(ss []Session, now time.Time) Rollup {
 			r.Ready++
 		case agents.OnHold:
 			r.OnHold++
+		case agents.Offline:
+			r.Offline++
 		}
 		if st > r.State {
 			r.State = st

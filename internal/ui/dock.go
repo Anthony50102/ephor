@@ -13,28 +13,32 @@ const dockWidth = "55%"
 // Docking moves an agent's real tmux pane beside Switchboard, so you work
 // in the agent itself, then sends it back to its own window.
 
-func (m *Model) toggleDock() {
+func (m *Model) toggleDock() tea.Cmd {
 	if m.opt.Dock == nil || m.opt.Undock == nil {
 		m.setErr(fmt.Errorf("docking an agent needs Switchboard running inside tmux"))
-		return
+		return nil
 	}
 	s, ok := m.selected()
+	if ok && s.Offline {
+		return m.restoreOne(s, restoreDock)
+	}
 	if m.docked != "" {
 		was := m.docked
 		if !m.undock() || !ok || s.Pane.PaneID == was {
-			return
+			return nil
 		}
 	}
 	if !ok || s.Pane.PaneID == "" {
 		m.setErr(fmt.Errorf("select a session to dock"))
-		return
+		return nil
 	}
 	if err := m.opt.Dock(s.Pane.PaneID); err != nil {
 		m.setErr(err)
-		return
+		return nil
 	}
 	m.docked, m.dockedTitle = s.Pane.PaneID, s.Title()
 	m.setStatus("Docked " + s.Title() + ". Pane keys move between it and here; V undocks from anywhere.")
+	return nil
 }
 
 // undockAny sends the currently docked agent back to its window from anywhere,

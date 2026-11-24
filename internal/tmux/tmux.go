@@ -69,6 +69,21 @@ func (c Client) ListPanes() ([]Pane, error) {
 	return ParsePanes(out), nil
 }
 
+// ServerID identifies the running tmux server instance using its PID and start
+// time, so Switchboard can distinguish closing one window from a tmux restart
+// or machine reboot.
+func (c Client) ServerID() (string, error) {
+	out, err := c.Run("display-message", "-p", "#{pid}:#{start_time}")
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(out)
+	if id == "" || id == ":" {
+		return "", fmt.Errorf("empty tmux server id")
+	}
+	return id, nil
+}
+
 // ParsePanes parses list-panes output produced with paneFormat.
 func ParsePanes(out string) []Pane {
 	var panes []Pane

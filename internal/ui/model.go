@@ -75,12 +75,13 @@ type orgOpt struct {
 
 // Options configure a Model. Tests replace the side-effecting functions.
 type Options struct {
-	Store     *store.State
-	StatePath string
-	Discover  func() ([]core.Session, error)
-	Jump      func(tmux.Pane) error // nil means quit and attach from outside tmux
-	Now       func() time.Time
-	NoTick    bool
+	Store        *store.State
+	StatePath    string
+	SnapshotPath string
+	Discover     func() ([]core.Session, error)
+	Jump         func(tmux.Pane) error // nil means quit and attach from outside tmux
+	Now          func() time.Time
+	NoTick       bool
 
 	// Summarize writes project summaries; nil turns them off.
 	Summarize    summary.Runner
@@ -246,7 +247,17 @@ func New(opt Options) Model {
 // Run starts the program. It returns a pane to attach to when the user jumped
 // from outside tmux.
 func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
-	opt.Discover = func() ([]core.Session, error) { return core.Discover(src) }
+	if opt.SnapshotPath == "" && opt.StatePath != "" {
+		opt.SnapshotPath = store.DefaultSnapshotPath(opt.StatePath)
+	}
+	nowFn := opt.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	snapPath := opt.SnapshotPath
+	opt.Discover = func() ([]core.Session, error) {
+		return core.DiscoverWithSnapshot(src, snapPath, nowFn())
+	}
 	if tmux.InsideTmux() {
 		opt.Jump = func(p tmux.Pane) error {
 			if err := src.Tmux.Focus(p); err != nil {
@@ -528,7 +539,7 @@ func (m Model) newCount(p store.Project) int {
 	}
 	var active []core.Session
 	for _, s := range m.sessionsIn(sideItem{kind: sideProject, pid: p.ID}) {
-		if !s.Held {
+		if !s.Held && !s.Offline {
 			active = append(active, s)
 		}
 	}
@@ -702,6 +713,9 @@ func (m Model) jump() (tea.Model, tea.Cmd) {
 	s, ok := m.selected()
 	if !ok {
 		return m, nil
+	}
+	if s.Offline {
+		return m, m.restoreOne(s, restoreJump)
 	}
 	if m.opt.Jump == nil {
 		p := s.Pane
@@ -1122,6 +1136,14 @@ func (m Model) holdTargetFromInput() (holdTarget, bool) {
 
 func (m Model) partitionHold(ss []core.Session) (holdable, held, active []core.Session) {
 	for _, s := range ss {
+		if s.Offline {
+			if s.Held {
+				held = append(held, s)
+			} else {
+				holdable = append(holdable, s)
+			}
+			continue
+		}
 		switch s.Info.State {
 		case agents.Working, agents.NeedsYou:
 			active = append(active, s)
@@ -1146,6 +1168,9 @@ func holdStamp(s core.Session, now time.Time) time.Time {
 // pruneWokenHolds removes persisted holds whose live sessions have already woken up.
 func (m Model) pruneWokenHolds(st *store.State) {
 	for _, s := range m.sessions {
+		if s.Offline {
+			continue
+		}
 		h, ok := st.Holds[s.Key]
 		if !ok {
 			continue
@@ -1371,6 +1396,10 @@ func (m *Model) startRename() {
 // ---- confirm ----
 
 func (m *Model) startDelete() {
+	if s, ok := m.focusedOffline(); ok {
+		m.dismissOffline(s)
+		return
+	}
 	sc := m.scope()
 	if sc.pid == "" {
 		m.setErr(fmt.Errorf("select a project or thread to delete"))

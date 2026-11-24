@@ -49,6 +49,8 @@ func stateName(st agents.State) string {
 		return "idle for over a week"
 	case agents.Ended:
 		return "ended"
+	case agents.Offline:
+		return "offline (saved from previous tmux session)"
 	}
 	return "unknown"
 }
@@ -137,7 +139,7 @@ func (m *Model) maybeSummarize() tea.Cmd {
 		order = append(order, p.ID)
 	}
 	for _, pid := range order {
-		if pid == "" || m.st.Project(pid) == nil || len(m.sessionsIn(sideItem{kind: sideProject, pid: pid})) == 0 {
+		if pid == "" || m.st.Project(pid) == nil || m.liveCount(sideItem{kind: sideProject, pid: pid}) == 0 {
 			continue
 		}
 		if m.staleSummary(pid, now) {
@@ -198,7 +200,7 @@ func (m *Model) forceSummary() tea.Cmd {
 		m.setErr(fmt.Errorf("select a project first"))
 	case m.sumBusy != "":
 		m.setStatus("Already writing a summary for " + m.placeName(m.sumBusy, ""))
-	case len(m.sessionsIn(sideItem{kind: sideProject, pid: pid})) == 0:
+	case m.liveCount(sideItem{kind: sideProject, pid: pid}) == 0:
 		m.setStatus("No live sessions to summarize.")
 	default:
 		m.setStatus("Writing a summary for " + m.placeName(pid, "") + "…")

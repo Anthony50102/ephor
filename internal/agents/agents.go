@@ -16,6 +16,7 @@ type State int
 // States are ordered from least to most urgent so rollups can take the max.
 const (
 	Unknown  State = iota
+	Offline        // saved from a previous tmux server; ready to resume
 	Ended          // process gone or session shut down
 	Quiet          // finished, and nothing has happened for a long time
 	OnHold         // parked / done for now / waiting on something else
@@ -26,6 +27,8 @@ const (
 
 func (s State) String() string {
 	switch s {
+	case Offline:
+		return "offline"
 	case Ended:
 		return "ended"
 	case Quiet:

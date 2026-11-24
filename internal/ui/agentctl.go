@@ -187,6 +187,10 @@ func (m *Model) startReply() tea.Cmd {
 		m.setErr(fmt.Errorf("select a session first"))
 		return nil
 	}
+	if s.Offline {
+		m.setStatus(s.Title() + " is offline. Press v to dock and resume it, or enter to open it.")
+		return nil
+	}
 	m.replyPane, m.replyTitle, m.screen, m.screenErr = s.Pane.PaneID, s.Title(), "", nil
 	m.screenGen++
 	m.status = ""

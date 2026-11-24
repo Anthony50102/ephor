@@ -61,6 +61,7 @@ const (
 	aHold
 	aHoldNote
 	aToggleRelNum
+	aRestore
 	aNavLeft
 	aNavRight
 	aNavDown
@@ -79,7 +80,7 @@ var normalKeys = map[string]action{
 	"enter": aEnter, "m": aMove, "a": aAccept,
 	"n": aNewProject, "t": aNewThread, "e": aDescribe, "r": aRename, "d": aDelete,
 	"o": aLaunch, "i": aReply, "y": aCopy, "s": aConnect, "v": aDock, "V": aUndock,
-	"p": aPark, "P": aParkAll, "x": aHold, "X": aHoldNote,
+	"p": aPark, "P": aParkAll, "x": aHold, "X": aHoldNote, "R": aRestore,
 	"/": aFilter, "esc": aEsc, "u": aRefresh, ":": aCommand,
 }
 
@@ -103,6 +104,7 @@ var prefixes = map[string][]keyHint{
 		{"X", "hold with a note (blocker or waiting reason)", aHoldNote},
 		{"p", "park this session in the background agents session", aPark},
 		{"P", "park all agent windows in the background agents session", aParkAll},
+		{"R", "restore offline sessions from the previous tmux server", aRestore},
 		{"n", "new project", aNewProject},
 		{"t", "new thread", aNewThread},
 		{"e", "toggle projects panel", aToggleSide},
@@ -364,7 +366,7 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 	case aSummarize:
 		return m, m.forceSummary()
 	case aDock:
-		m.toggleDock()
+		return m, m.toggleDock()
 	case aUndock:
 		m.undockAny()
 	case aPark:
@@ -377,6 +379,8 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 		m.startHoldNote()
 	case aToggleRelNum:
 		m.toggleRelativeNumbers()
+	case aRestore:
+		return m, m.restoreAction()
 	case aCopy:
 		m.copyAccess()
 	case aConnect:
@@ -444,6 +448,16 @@ func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
 		return m, m.parkOne()
 	case "park-all", "parkall":
 		return m, m.parkAll()
+	case "restore":
+		return m, m.restoreScope(arg == "all")
+	case "dismiss":
+		if arg == "all" {
+			m.dismissScopeOffline()
+		} else if s, ok := m.focusedOffline(); ok {
+			m.dismissOffline(s)
+		} else {
+			m.setStatus("Select an offline session to dismiss, or run :dismiss all.")
+		}
 	case "hold":
 		if arg == "" {
 			m.toggleHold()

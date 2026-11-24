@@ -40,7 +40,9 @@ func main() {
 
 Commands:
   (none)                            open the control panel
-  list [--json]                     print discovered sessions
+  list [--json]                     print discovered (and recoverable offline) sessions
+  restore [--all] [--dry-run] [project]
+                                    resume offline sessions from the previous tmux server into agents
   summarize [--dry-run] <project>   write one project's summary now, or print the prompt
   cloud [project]                   list cloud resources sessions have touched
 
@@ -79,9 +81,10 @@ Flags:
 		fail(fmt.Errorf("--live must be auto, on, or off"))
 	}
 
+	snapPath := store.DefaultSnapshotPath(*statePath)
 	switch fs.Arg(0) {
 	case "":
-		opt := ui.Options{Store: st, StatePath: *statePath,
+		opt := ui.Options{Store: st, StatePath: *statePath, SnapshotPath: snapPath,
 			Summarize: run, SummaryPath: filepath.Join(dir, "summaries.json"), SummaryEvery: *every,
 			CloudPath: filepath.Join(dir, "cloud.json"), CheckLive: check,
 			PricePath: filepath.Join(dir, "prices.json"), Copy: ui.Clipboard}
@@ -102,7 +105,11 @@ Flags:
 			fail(tmux.ExecAttach(*target))
 		}
 	case "list":
-		if err := list(src, st, fs.Arg(1) == "--json"); err != nil {
+		if err := list(src, st, snapPath, fs.Arg(1) == "--json"); err != nil {
+			fail(err)
+		}
+	case "restore":
+		if err := restoreCLI(src, st, snapPath, fs.Args()[1:]); err != nil {
 			fail(err)
 		}
 	case "cloud":
@@ -124,13 +131,13 @@ Flags:
 	}
 }
 
-func list(src core.Sources, st *store.State, jsonOut bool) error {
-	ss, err := core.Discover(src)
+func list(src core.Sources, st *store.State, snapPath string, jsonOut bool) error {
+	now := time.Now()
+	ss, err := core.DiscoverWithSnapshot(src, snapPath, now)
 	if err != nil {
 		return err
 	}
 	core.ApplyHolds(ss, st.Holds)
-	now := time.Now()
 	core.SortSessions(ss, now)
 	placement := func(s core.Session) (string, string) {
 		a, ok := st.Assign[s.Key]
@@ -153,6 +160,7 @@ func list(src core.Sources, st *store.State, jsonOut bool) error {
 			Title      string    `json:"title"`
 			Tmux       string    `json:"tmux"`
 			State      string    `json:"state"`
+			Offline    bool      `json:"offline,omitempty"`
 			Scheduled  string    `json:"scheduled,omitempty"`
 			HoldReason string    `json:"holdReason,omitempty"`
 			Reason     string    `json:"reason,omitempty"`
@@ -164,7 +172,11 @@ func list(src core.Sources, st *store.State, jsonOut bool) error {
 		rows := []row{}
 		for _, s := range ss {
 			p, t := placement(s)
-			rows = append(rows, row{s.Key, s.Kind, s.Title(), s.Pane.Target(), s.State(now).String(),
+			target := s.Pane.Target()
+			if s.Offline {
+				target = ""
+			}
+			rows = append(rows, row{s.Key, s.Kind, s.Title(), target, s.State(now).String(), s.Offline,
 				s.Info.Scheduled, s.HoldReason, s.Info.Reason, s.Info.Ask, p, t, s.Info.UpdatedAt})
 		}
 		enc := json.NewEncoder(os.Stdout)
@@ -178,9 +190,162 @@ func list(src core.Sources, st *store.State, jsonOut bool) error {
 		if p == "" {
 			p = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", s.State(now), core.Ago(s.Info.UpdatedAt, now), s.Pane.Target(), s.Kind, s.Title(), p)
+		target := s.Pane.Target()
+		if s.Offline {
+			target = "(saved)"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", s.State(now), core.Ago(s.Info.UpdatedAt, now), target, s.Kind, s.Title(), p)
 	}
 	return w.Flush()
+}
+
+func restoreCLI(src core.Sources, st *store.State, snapPath string, args []string) error {
+	rfs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	includeAll := rfs.Bool("all", false, "also restore sessions that were put on hold")
+	dryRun := rfs.Bool("dry-run", false, "show what would be restored without starting tmux windows")
+	if err := rfs.Parse(args); err != nil {
+		return err
+	}
+	projFilter := strings.TrimSpace(strings.Join(rfs.Args(), " "))
+	var wantPID string
+	if projFilter != "" {
+		for _, p := range st.Projects {
+			if strings.EqualFold(p.Name, projFilter) {
+				wantPID = p.ID
+				break
+			}
+		}
+		if wantPID == "" {
+			return fmt.Errorf("no project named %q", projFilter)
+		}
+	}
+
+	now := time.Now()
+	live, liveErr := core.Discover(src)
+	serverID := ""
+	if liveErr == nil {
+		serverID, _ = src.Tmux.ServerID()
+	}
+
+	snap, err := store.LoadSnapshot(snapPath)
+	if err != nil {
+		return err
+	}
+	if !*dryRun && serverID != "" {
+		savedLive := core.SavedFromSessions(live, now)
+		snap, err = store.UpdateSnapshot(snapPath, func(s *store.Snapshot) (bool, error) {
+			return s.Sync(serverID, savedLive, now), nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	liveKeys := map[string]bool{}
+	for _, s := range live {
+		liveKeys[s.Key] = true
+	}
+	var candidates []store.SavedSession
+	for _, sv := range snap.AllRecoverable(serverID) {
+		if !liveKeys[sv.Key] {
+			candidates = append(candidates, sv)
+		}
+	}
+	hydrated := core.HydrateSaved(candidates, src)
+	core.ApplyHolds(hydrated, st.Holds)
+
+	var targets []core.Session
+	skippedHeld := 0
+	for _, s := range hydrated {
+		if wantPID != "" {
+			a, ok := st.Assign[s.Key]
+			if !ok || a.Project != wantPID {
+				continue
+			}
+		}
+		if s.Held && !*includeAll {
+			skippedHeld++
+			continue
+		}
+		targets = append(targets, s)
+	}
+
+	if len(targets) == 0 {
+		if skippedHeld > 0 {
+			fmt.Printf("No active sessions to restore (%d on hold; pass --all to restore them).\n", skippedHeld)
+			return nil
+		}
+		fmt.Println("Nothing to restore (all saved sessions are already live).")
+		return nil
+	}
+
+	projectName := func(key string) string {
+		if a, ok := st.Assign[key]; ok {
+			if p := st.Project(a.Project); p != nil {
+				return p.Name
+			}
+		}
+		return "-"
+	}
+
+	if *dryRun {
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "PROJECT\tWINDOW\tKIND\tTITLE\tCOMMAND")
+		for _, s := range targets {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+				projectName(s.Key), core.ResumeWindowName(s), s.Kind, s.Title(), core.ResumeCommand(s.Kind, s.Info.ID))
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
+		if skippedHeld > 0 {
+			fmt.Printf("\nSkipping %d on-hold session(s) (pass --all to include them).\n", skippedHeld)
+		}
+		return nil
+	}
+
+	var restoredKeys []string
+	for _, s := range targets {
+		cmd := core.ResumeCommand(s.Kind, s.Info.ID)
+		if cmd == "" {
+			continue
+		}
+		dir, fallback := core.ResumeDir(s.Info.Cwd)
+		win := core.ResumeWindowName(s)
+		pane, err := src.Tmux.NewWindow(tmux.PoolSession, win, dir)
+		if err != nil {
+			return fmt.Errorf("open tmux window for %s: %w", s.Title(), err)
+		}
+		if err := src.Tmux.Type(pane, cmd); err != nil {
+			return fmt.Errorf("start %s: %w", s.Title(), err)
+		}
+		restoredKeys = append(restoredKeys, s.Key)
+		note := ""
+		if fallback {
+			note = " (folder missing; started in ~)"
+		}
+		fmt.Printf("Restored %-24s -> %s:%s (%s)%s\n", s.Title(), tmux.PoolSession, win, projectName(s.Key), note)
+	}
+
+	// Sync the snapshot to the now-running tmux server and drop restored keys
+	// from Recoverable so the UI does not show them as offline while booting.
+	newServerID, _ := src.Tmux.ServerID()
+	savedLive := core.SavedFromSessions(live, now)
+	_, _ = store.UpdateSnapshot(snapPath, func(s *store.Snapshot) (bool, error) {
+		ch := false
+		if newServerID != "" {
+			ch = s.Sync(newServerID, savedLive, now) || ch
+		}
+		if s.Dismiss(restoredKeys...) {
+			ch = true
+		}
+		return ch, nil
+	})
+
+	if skippedHeld > 0 {
+		fmt.Printf("Skipped %d on-hold session(s) (pass --all to include them).\n", skippedHeld)
+	}
+	return nil
 }
 
 func fail(err error) {
