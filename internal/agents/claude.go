@@ -154,6 +154,7 @@ type claudeBlock struct {
 
 func readClaudeTranscript(path string, info *Info) {
 	decided, lastPrompt := false, false
+	var workAt time.Time
 	_ = scanBackward(path, maxScanBytes, func(line []byte) bool {
 		var e claudeEntry
 		if json.Unmarshal(line, &e) != nil || e.IsSidechain {
@@ -182,6 +183,9 @@ func readClaudeTranscript(path string, info *Info) {
 				info.Ask, lastPrompt = oneLine(e.LastPrompt, 400), true
 			}
 		case "user":
+			if e.Timestamp.After(workAt) {
+				workAt = e.Timestamp
+			}
 			var s string
 			isPrompt := json.Unmarshal(e.Message.Content, &s) == nil && !e.IsMeta && !strings.HasPrefix(s, "<")
 			if isPrompt {
@@ -195,6 +199,9 @@ func readClaudeTranscript(path string, info *Info) {
 				info.State, decided = Working, true
 			}
 		case "assistant":
+			if e.Timestamp.After(workAt) {
+				workAt = e.Timestamp
+			}
 			var blocks []claudeBlock
 			_ = json.Unmarshal(e.Message.Content, &blocks)
 			var said []string
@@ -223,8 +230,11 @@ func readClaudeTranscript(path string, info *Info) {
 				info.State, decided = Working, true
 			}
 		}
-		return !(decided && len(info.Asks) >= maxAsks && info.Said != "" && len(info.Results) >= maxResults)
+		return !(decided && !workAt.IsZero() && len(info.Asks) >= maxAsks && info.Said != "" && len(info.Results) >= maxResults)
 	})
+	if !workAt.IsZero() {
+		info.UpdatedAt = workAt
+	}
 	info.Arc = sampleArc(info.Arc, maxArc)
 }
 

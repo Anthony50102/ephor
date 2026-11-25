@@ -414,4 +414,25 @@ func TestCopilotBackgroundCheckpointAndDedupAsks(t *testing.T) {
 	if info3.State != Ready || info3.Scheduled != "" {
 		t.Fatalf("subagent prose + stopped shell: state=%v scheduled=%q; want ready / empty", info3.State, info3.Scheduled)
 	}
+
+	// Resuming a session appends session.resume and permission bookkeeping events;
+	// UpdatedAt must stay at the last real turn so holds survive a restart.
+	sdir4 := filepath.Join(dir, "resume-preserves-updated")
+	_ = os.MkdirAll(sdir4, 0o755)
+	_ = os.WriteFile(filepath.Join(sdir4, "workspace.yaml"), []byte("name: eval\nupdated_at: 2026-11-25T07:41:44Z\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(sdir4, "events.jsonl"), []byte(
+		`{"type":"user.message","timestamp":"2026-11-24T23:30:00Z","data":{"content":"check eval"}}`+"\n"+
+			`{"type":"assistant.message","timestamp":"2026-11-24T23:35:25Z","data":{"content":"All set."}}`+"\n"+
+			`{"type":"assistant.turn_end","timestamp":"2026-11-24T23:35:26Z","data":{"turnId":"1"}}`+"\n"+
+			`{"type":"session.resume","timestamp":"2026-11-25T07:41:42Z","data":{"resumeTime":"2026-11-25T07:41:42Z"}}`+"\n"+
+			`{"type":"session.permission_grants_recorded","timestamp":"2026-11-25T07:41:44Z","data":{"urlsRevoked":true}}`+"\n",
+	), 0o644)
+	info4, err := c.Read("resume-preserves-updated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAt := time.Date(2026, 11, 24, 23, 35, 26, 0, time.UTC)
+	if info4.State != Ready || !info4.UpdatedAt.Equal(wantAt) {
+		t.Fatalf("resumed session: state=%v updatedAt=%v; want Ready / %v", info4.State, info4.UpdatedAt, wantAt)
+	}
 }

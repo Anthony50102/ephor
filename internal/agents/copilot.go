@@ -157,6 +157,20 @@ var copilotStateTypes = map[string]bool{
 	"session.schedule_created": true, "session.schedule_cancelled": true,
 }
 
+// Event types that represent real conversation or agent work and should update
+// UpdatedAt (and auto-wake a held session). Lifecycle bookkeeping events like
+// session.resume, session.shutdown, and session.permission_grants_recorded are
+// intentionally excluded so restarting or resuming a held session keeps it on
+// hold until actual new work happens.
+var copilotActivityTypes = map[string]bool{
+	"permission.requested": true, "permission.completed": true,
+	"tool.execution_start": true, "tool.execution_complete": true,
+	"assistant.turn_start": true, "assistant.turn_end": true, "assistant.message": true,
+	"user.message": true, "session.task_complete": true, "abort": true,
+	"subagent.started": true, "subagent.completed": true,
+	"session.schedule_created": true, "session.schedule_cancelled": true,
+}
+
 func readCopilotEvents(path string, info *Info) error {
 	decided := false
 	completed := map[string]bool{}
@@ -168,6 +182,8 @@ func readCopilotEvents(path string, info *Info) error {
 	bgDone := map[string]bool{}
 	bgActive := false
 	bgClosed := false
+	var workAt time.Time
+	var fallbackAt time.Time
 	err := scanBackward(path, maxScanBytes, func(line []byte) bool {
 		typ := eventType(line)
 		isSched := typ == "session.schedule_created" || typ == "session.schedule_cancelled"
@@ -176,21 +192,23 @@ func readCopilotEvents(path string, info *Info) error {
 			(typ == "tool.execution_start" && bytes.Contains(line, []byte(`"stop_bash"`))) ||
 			(typ == "tool.execution_complete" && (bytes.Contains(line, []byte(`is still running`)) || bytes.Contains(line, []byte(`started in background`)) || bytes.Contains(line, []byte(`completed with exit code`)) || bytes.Contains(line, []byte(`has been stopped`)) || bytes.Contains(line, []byte(`stopped>`)))) ||
 			typ == "session.resume" || typ == "session.shutdown")
-		if decided && !isSched && !isWakeup && !isBg && typ != "user.message" && typ != "session.task_complete" && !(typ == "assistant.message" && info.Said == "") {
+		needWorkAt := workAt.IsZero() && copilotActivityTypes[typ]
+		if decided && !needWorkAt && !isSched && !isWakeup && !isBg && typ != "user.message" && typ != "session.task_complete" && !(typ == "assistant.message" && info.Said == "") {
 			return true
 		}
 		if !decided && !copilotStateTypes[typ] && !isBg && typ != "" {
-			if info.UpdatedAt.IsZero() || len(line) < 4096 {
-				noteTime(line, info)
-			}
 			return true
 		}
 		var e copilotEvent
 		if json.Unmarshal(line, &e) != nil {
 			return true
 		}
-		if e.Timestamp.After(info.UpdatedAt) {
-			info.UpdatedAt = e.Timestamp
+		if copilotActivityTypes[e.Type] {
+			if e.Timestamp.After(workAt) {
+				workAt = e.Timestamp
+			}
+		} else if e.Type == "session.start" && e.Timestamp.After(fallbackAt) {
+			fallbackAt = e.Timestamp
 		}
 		main := e.AgentID == ""
 		switch e.Type {
@@ -263,8 +281,13 @@ func readCopilotEvents(path string, info *Info) error {
 		if !decided {
 			decided = decideCopilot(e, main, completed, info)
 		}
-		return !(decided && len(info.Asks) >= maxAsks && info.Said != "" && len(info.Results) >= maxResults)
+		return !(decided && !workAt.IsZero() && len(info.Asks) >= maxAsks && info.Said != "" && len(info.Results) >= maxResults)
 	})
+	if !workAt.IsZero() {
+		info.UpdatedAt = workAt
+	} else if !fallbackAt.IsZero() && fallbackAt.After(info.UpdatedAt) {
+		info.UpdatedAt = fallbackAt
+	}
 	if activeSchedID == 0 && firedActiveID > 0 && !schedCancelled[firedActiveID] {
 		activeSchedID = firedActiveID
 		activeSchedLabel = "scheduled"
@@ -328,15 +351,6 @@ func decideCopilot(e copilotEvent, main bool, completed map[string]bool, info *I
 		return true
 	}
 	return false
-}
-
-func noteTime(line []byte, info *Info) {
-	var e struct {
-		Timestamp time.Time `json:"timestamp"`
-	}
-	if json.Unmarshal(line, &e) == nil && e.Timestamp.After(info.UpdatedAt) {
-		info.UpdatedAt = e.Timestamp
-	}
 }
 
 // parseScheduledPromptID extracts the schedule ID from Copilot CLI's
