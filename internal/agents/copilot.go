@@ -174,7 +174,7 @@ func readCopilotEvents(path string, info *Info) error {
 		isWakeup := typ == "tool.execution_start" && bytes.Contains(line, []byte(`"manage_schedule"`))
 		isBg := !bgClosed && ((typ == "system.notification" && bytes.Contains(line, []byte(`"shell_completed"`))) ||
 			(typ == "tool.execution_start" && bytes.Contains(line, []byte(`"stop_bash"`))) ||
-			(typ == "tool.execution_complete" && (bytes.Contains(line, []byte(`is still running`)) || bytes.Contains(line, []byte(`started in background`)) || bytes.Contains(line, []byte(`completed with exit code`)) || bytes.Contains(line, []byte(`has been stopped`)))) ||
+			(typ == "tool.execution_complete" && (bytes.Contains(line, []byte(`is still running`)) || bytes.Contains(line, []byte(`started in background`)) || bytes.Contains(line, []byte(`completed with exit code`)) || bytes.Contains(line, []byte(`has been stopped`)) || bytes.Contains(line, []byte(`stopped>`)))) ||
 			typ == "session.resume" || typ == "session.shutdown")
 		if decided && !isSched && !isWakeup && !isBg && typ != "user.message" && typ != "session.task_complete" && !(typ == "assistant.message" && info.Said == "") {
 			return true
@@ -372,44 +372,63 @@ func formatScheduleInterval(ms int64) string {
 	}
 }
 
-// parseCompletedShellID extracts the shellId when a background shell finishes
-// via read_bash or stop_bash ("<shellId: 123 completed with exit code 0>").
-func parseCompletedShellID(content string) (string, bool) {
-	if !strings.Contains(content, "completed with exit code") && !strings.Contains(content, "has been stopped") {
+// lastFooter returns the final trimmed line of content when it is an
+// angle-bracketed Copilot CLI bash tool footer (e.g. "<shellId: 12 ...>"),
+// preventing subagent markdown reports or prose from matching shell patterns.
+func lastFooter(content string) string {
+	s := strings.TrimSpace(content)
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		s = strings.TrimSpace(s[i+1:])
+	}
+	if !strings.HasPrefix(s, "<") || !strings.HasSuffix(s, ">") {
+		return ""
+	}
+	return s
+}
+
+func extractFooterToken(footer, prefix string) (string, bool) {
+	if !strings.HasPrefix(footer, prefix) {
 		return "", false
 	}
-	const marker = "shellId: "
-	i := strings.LastIndex(content, marker)
-	if i < 0 {
-		return "", false
-	}
-	rest := content[i+len(marker):]
-	end := strings.IndexAny(rest, " )>\n\r\t,")
-	if end >= 0 {
+	rest := footer[len(prefix):]
+	if end := strings.IndexAny(rest, " >\t\r\n"); end >= 0 {
 		rest = rest[:end]
 	}
 	rest = strings.TrimSpace(rest)
 	return rest, rest != ""
 }
 
+// parseCompletedShellID extracts the shellId when a background shell finishes
+// via read_bash or stop_bash ("<shellId: 123 completed with exit code 0>" or
+// "<command with id: 123 stopped>").
+func parseCompletedShellID(content string) (string, bool) {
+	footer := lastFooter(content)
+	if footer == "" {
+		return "", false
+	}
+	if strings.HasPrefix(footer, "<shellId: ") && (strings.Contains(footer, " completed with exit code ") || strings.Contains(footer, " has been stopped")) {
+		return extractFooterToken(footer, "<shellId: ")
+	}
+	if strings.HasPrefix(footer, "<command with id: ") && strings.HasSuffix(footer, " stopped>") {
+		return extractFooterToken(footer, "<command with id: ")
+	}
+	return "", false
+}
+
 // parseBgShellID extracts the shellId from Copilot CLI's background bash tool
-// output when a command continues running asynchronously after the turn ends.
+// footer when a command continues running asynchronously after the turn ends.
 func parseBgShellID(content string) (string, bool) {
-	if !strings.Contains(content, "is still running") && !strings.Contains(content, "started in background") {
+	footer := lastFooter(content)
+	if footer == "" {
 		return "", false
 	}
-	const marker = "shellId: "
-	i := strings.Index(content, marker)
-	if i < 0 {
-		return "", false
+	if strings.HasPrefix(footer, "<command with shellId: ") && strings.Contains(footer, " is still running") {
+		return extractFooterToken(footer, "<command with shellId: ")
 	}
-	rest := content[i+len(marker):]
-	end := strings.IndexAny(rest, " )>\n\r\t,")
-	if end >= 0 {
-		rest = rest[:end]
+	if strings.HasPrefix(footer, "<command started in background with shellId: ") {
+		return extractFooterToken(footer, "<command started in background with shellId: ")
 	}
-	rest = strings.TrimSpace(rest)
-	return rest, rest != ""
+	return "", false
 }
 
 // readCheckpoints parses Copilot CLI's checkpoints/index.md table and returns

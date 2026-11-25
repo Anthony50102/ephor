@@ -111,12 +111,35 @@ func AgentKind(args string) string {
 	return ""
 }
 
-// FindAgent returns the shallowest agent process under root.
+func isSwitchboard(args string) bool {
+	f := strings.Fields(args)
+	if len(f) == 0 {
+		return false
+	}
+	return filepath.Base(f[0]) == "switchboard"
+}
+
+// FindAgent returns the shallowest agent process under root, skipping any
+// Switchboard subtree so transient summarizer sub-processes are never listed.
 func (t Table) FindAgent(root int) (Proc, string, bool) {
-	for _, p := range t.Descendants(root) {
-		if k := AgentKind(p.Args); k != "" {
-			return p, k, true
+	queue := []int{root}
+	seen := map[int]bool{}
+	for len(queue) > 0 {
+		pid := queue[0]
+		queue = queue[1:]
+		if seen[pid] {
+			continue
 		}
+		seen[pid] = true
+		if p, ok := t.ByPID[pid]; ok {
+			if isSwitchboard(p.Args) {
+				continue
+			}
+			if k := AgentKind(p.Args); k != "" {
+				return p, k, true
+			}
+		}
+		queue = append(queue, t.children[pid]...)
 	}
 	return Proc{}, "", false
 }

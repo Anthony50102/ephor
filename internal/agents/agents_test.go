@@ -395,4 +395,23 @@ func TestCopilotBackgroundCheckpointAndDedupAsks(t *testing.T) {
 	if len(info2.Asks) != 2 || info2.Asks[1].Text != "first human ask" {
 		t.Fatalf("repeated asks should deduplicate while keeping earlier asks, got %+v", info2.Asks)
 	}
+
+	// Subagent markdown prose quoting shellId/still-running text must not mark a
+	// finished session as Working, and stop_bash's "<command with id: X stopped>"
+	// footer clears a real background shell.
+	sdir3 := filepath.Join(dir, "bg-subagent-prose")
+	_ = os.MkdirAll(sdir3, 0o755)
+	_ = os.WriteFile(filepath.Join(sdir3, "events.jsonl"), []byte(
+		`{"type":"tool.execution_complete","timestamp":"2026-11-24T21:00:00Z","data":{"toolCallId":"t1","result":{"content":"<command with shellId: 1069 is still running after 30 seconds.>"}}}`+"\n"+
+			`{"type":"tool.execution_complete","timestamp":"2026-11-24T21:01:00Z","data":{"toolCallId":"t2","result":{"content":"- shellId: `+"`1069`"+`\n- exact tool message: `+"`The command is still running.`"+`\n</final_answer>"}}}`+"\n"+
+			`{"type":"tool.execution_complete","timestamp":"2026-11-24T21:02:00Z","data":{"toolCallId":"t3","result":{"content":"<command with id: 1069 stopped>"}}}`+"\n"+
+			`{"type":"assistant.turn_end","timestamp":"2026-11-24T21:03:00Z","data":{"turnId":"5"}}`+"\n",
+	), 0o644)
+	info3, err := c.Read("bg-subagent-prose")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info3.State != Ready || info3.Scheduled != "" {
+		t.Fatalf("subagent prose + stopped shell: state=%v scheduled=%q; want ready / empty", info3.State, info3.Scheduled)
+	}
 }

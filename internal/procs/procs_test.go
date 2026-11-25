@@ -14,6 +14,9 @@ func TestFindAgent(t *testing.T) {
   300     1 /bin/bash
   301   300 /home/me/.local/bin/claude --continue
   302   301 rg claude
+  400     1 -zsh
+  401   400 /home/me/.local/bin/switchboard
+  402   401 copilot --model claude-haiku-4.5 -p summarize
 `)
 	if p, k, ok := tab.FindAgent(100); !ok || k != Copilot || p.PID != 101 {
 		t.Fatalf("copilot via node: %v %v %v", p, k, ok)
@@ -23,6 +26,9 @@ func TestFindAgent(t *testing.T) {
 	}
 	if p, k, ok := tab.FindAgent(300); !ok || k != Claude || p.PID != 301 {
 		t.Fatalf("claude: %v %v %v", p, k, ok)
+	}
+	if _, _, ok := tab.FindAgent(400); ok {
+		t.Fatal("switchboard's own summarizer child must not be discovered as an agent")
 	}
 	if AgentKind("grep copilot-notes.txt") != "" {
 		t.Fatal("an argument mentioning copilot is not the copilot binary")
