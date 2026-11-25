@@ -220,3 +220,40 @@ func TestPoolRealTmux(t *testing.T) {
 		t.Fatalf("after NewWindow:\n%s", out)
 	}
 }
+
+func TestLaunchSessionPrefersAttachedClient(t *testing.T) {
+	t.Setenv("TMUX", "")
+
+	// Detached pool + attached main session -> launch in main, then park.
+	c := Client{Run: func(args ...string) (string, error) {
+		switch args[0] {
+		case "display-message":
+			return "0\n", nil
+		case "list-sessions":
+			return "$1\x1f0\n$2\x1f1\n", nil
+		}
+		return "", nil
+	}}
+	if sess, needsPark := c.LaunchSession(PoolSession); sess != "$2" || !needsPark {
+		t.Fatalf("LaunchSession(detached pool, attached $2) = (%q, %v), want ($2, true)", sess, needsPark)
+	}
+
+	// Already-attached pool -> launch directly in pool, no park needed.
+	cAttached := Client{Run: func(args ...string) (string, error) {
+		return "1\n", nil
+	}}
+	if sess, needsPark := cAttached.LaunchSession(PoolSession); sess != PoolSession || needsPark {
+		t.Fatalf("LaunchSession(attached pool) = (%q, %v), want (%q, false)", sess, needsPark, PoolSession)
+	}
+
+	// No attached clients anywhere -> fall back to pool directly.
+	cNone := Client{Run: func(args ...string) (string, error) {
+		if args[0] == "list-sessions" {
+			return "$1\x1f0\n", nil
+		}
+		return "0\n", nil
+	}}
+	if sess, needsPark := cNone.LaunchSession(PoolSession); sess != PoolSession || needsPark {
+		t.Fatalf("LaunchSession(no attached) = (%q, %v), want (%q, false)", sess, needsPark, PoolSession)
+	}
+}

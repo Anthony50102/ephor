@@ -304,7 +304,9 @@ func restoreCLI(src core.Sources, st *store.State, snapPath string, args []strin
 		return nil
 	}
 
+	launchSess, needsPark := src.Tmux.LaunchSession(tmux.PoolSession)
 	var restoredKeys []string
+	var parkPanes []string
 	for _, s := range targets {
 		cmd := core.ResumeCommand(s.Kind, s.Info.ID)
 		if cmd == "" {
@@ -312,7 +314,7 @@ func restoreCLI(src core.Sources, st *store.State, snapPath string, args []strin
 		}
 		dir, fallback := core.ResumeDir(s.Info.Cwd)
 		win := core.ResumeWindowName(s)
-		pane, err := src.Tmux.NewWindow(tmux.PoolSession, win, dir)
+		pane, err := src.Tmux.NewWindow(launchSess, win, dir)
 		if err != nil {
 			return fmt.Errorf("open tmux window for %s: %w", s.Title(), err)
 		}
@@ -320,11 +322,23 @@ func restoreCLI(src core.Sources, st *store.State, snapPath string, args []strin
 			return fmt.Errorf("start %s: %w", s.Title(), err)
 		}
 		restoredKeys = append(restoredKeys, s.Key)
+		if needsPark && pane != "" {
+			parkPanes = append(parkPanes, pane)
+		}
 		note := ""
 		if fallback {
 			note = " (folder missing; started in ~)"
 		}
 		fmt.Printf("Restored %-24s -> %s:%s (%s)%s\n", s.Title(), tmux.PoolSession, win, projectName(s.Key), note)
+	}
+	if len(parkPanes) > 0 {
+		// Wait briefly for zsh + CLI startup OSC color detection in the
+		// attached session before parking the restored windows into agents.
+		time.Sleep(3 * time.Second)
+		self := os.Getenv("TMUX_PANE")
+		for _, pane := range parkPanes {
+			_, _ = src.Tmux.Park(pane, tmux.PoolSession, self)
+		}
 	}
 
 	// Sync the snapshot to the now-running tmux server and drop restored keys

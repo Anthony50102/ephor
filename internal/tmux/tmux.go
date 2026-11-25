@@ -168,6 +168,63 @@ func (c Client) hasSession(session string) bool {
 	return err == nil
 }
 
+// SessionAttached reports whether session currently has at least one attached
+// tmux client.
+func (c Client) SessionAttached(session string) bool {
+	if session == "" {
+		return false
+	}
+	out, err := c.Run("display-message", "-p", "-t", exactSession(session), "#{session_attached}")
+	if err != nil {
+		return false
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(out))
+	return n > 0
+}
+
+// AttachedSession returns the ID of an attached tmux session (preferring the
+// current client's session), or empty if no client is attached.
+func (c Client) AttachedSession() string {
+	if InsideTmux() {
+		if out, err := c.Run("display-message", "-p", "#{session_id}"+sep+"#{session_attached}"); err == nil {
+			id, att, ok := strings.Cut(strings.TrimSpace(out), sep)
+			if ok && id != "" && att != "0" && att != "" {
+				return id
+			}
+		}
+	}
+	out, err := c.Run("list-sessions", "-F", "#{session_id}"+sep+"#{session_attached}")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		id, att, ok := strings.Cut(strings.TrimSpace(line), sep)
+		if !ok || id == "" {
+			continue
+		}
+		if n, _ := strconv.Atoi(att); n > 0 {
+			return id
+		}
+	}
+	return ""
+}
+
+// LaunchSession chooses which tmux session should host a background agent
+// window during startup. If pool has no attached client, tmux cannot answer
+// OSC 10/11/4 terminal color queries for panes created directly in pool, so
+// Copilot CLI falls back to 16-color ANSI. When another session is attached,
+// LaunchSession returns that session with needsPark=true so the caller can
+// park the window into pool once startup color detection finishes.
+func (c Client) LaunchSession(pool string) (session string, needsPark bool) {
+	if pool == "" || c.SessionAttached(pool) {
+		return pool, false
+	}
+	if att := c.AttachedSession(); att != "" {
+		return att, true
+	}
+	return pool, false
+}
+
 // Dock moves an agent's pane into the host pane's window, to its right, and
 // selects it. width is a tmux size such as "60%".
 func (c Client) Dock(paneID, hostPane, width string) error {

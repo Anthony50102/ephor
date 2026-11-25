@@ -22,6 +22,10 @@ type LaunchReq struct {
 	Dir     string
 	Command string
 	Pretype string // typed after Command without Enter, left for the user to finish
+	// BeforeType runs after the window is created and before Command is typed
+	// (e.g. docking or switching the client so the pane has an attached client
+	// for terminal color queries before Copilot starts).
+	BeforeType func(paneID string) error
 }
 
 // screenMsg carries a capture of the pane being typed to.
@@ -89,7 +93,7 @@ func (m *Model) commitLaunchDir(v string) {
 
 // launch opens a tmux window running Copilot. Switchboard picks the session
 // ID, so the session is filed under its project before Copilot starts.
-func (m *Model) launch(dir, task string) {
+func (m *Model) launch(dir, task string) tea.Cmd {
 	pid, tid := m.inputPID, m.inputTID
 	if pid != "" && m.st.Project(pid) == nil {
 		pid, tid = "", ""
@@ -109,7 +113,7 @@ func (m *Model) launch(dir, task string) {
 			st.AssignSession(key, pid, tid, name, now)
 			return nil
 		}) {
-			return
+			return nil
 		}
 	}
 	req := LaunchReq{Session: tmux.PoolSession, Dir: dir, Window: windowName(name), Command: copilotCommand(id, name, task)}
@@ -119,7 +123,7 @@ func (m *Model) launch(dir, task string) {
 			m.change(func(st *store.State) error { st.AssignSession(key, "", "", "", m.opt.Now()); return nil })
 		}
 		m.setErr(fmt.Errorf("could not start Copilot: %w", err))
-		return
+		return nil
 	}
 	m.wantKey = key
 	where := "the inbox"
@@ -127,6 +131,7 @@ func (m *Model) launch(dir, task string) {
 		where = name
 	}
 	m.setStatus(fmt.Sprintf("Started Copilot in %s (%s %s). Press v to dock it.", where, tmux.PoolSession, pane))
+	return parkAfterLaunchCmd(pane)
 }
 
 // copilotCommand is the shell line typed into the new window. Typing it,

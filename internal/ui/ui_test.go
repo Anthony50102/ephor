@@ -1431,8 +1431,40 @@ func TestOfflineRestoreAndDismissWorkflow(t *testing.T) {
 	h.m.sessions = []core.Session{offActive}
 	h.m.syncSelectionTo(offActive.Key)
 	h.m.focus = focusSessions
+	var order []string
+	h.m.opt.Show = func(paneID string) error {
+		order = append(order, "show:"+paneID)
+		shown = append(shown, paneID)
+		return nil
+	}
+	h.m.opt.Launch = func(r LaunchReq) (string, error) {
+		paneSeq++
+		pane := fmt.Sprintf("%%9%d", paneSeq)
+		order = append(order, "new:"+pane)
+		if r.BeforeType != nil {
+			if err := r.BeforeType(pane); err != nil {
+				return pane, err
+			}
+		}
+		order = append(order, "type:"+r.Command)
+		return pane, nil
+	}
 	h.keys("enter")
 	if len(shown) != 1 || shown[0] != "%93" {
 		t.Fatalf("enter on offline session should jump via Show, got %v", shown)
+	}
+	if strings.Join(order, " -> ") != "new:%93 -> show:%93 -> type:copilot --resume=11111111-aaaa-bbbb-cccc-000000000001" {
+		t.Fatalf("Show must run before typing resume command so OSC color queries see an attached client; got %v", order)
+	}
+
+	// parkPaneMsg parks background-restored panes into agents, and rehomes any pane
+	// that was docked before the timer fired.
+	var parked, rehomed []string
+	h.m.opt.Park = func(paneID string) (bool, error) { parked = append(parked, paneID); return true, nil }
+	h.m.opt.Rehome = func(paneID string) error { rehomed = append(rehomed, paneID); return nil }
+	h.m.docked = "%91"
+	h.send(parkPaneMsg{panes: []string{"%91", "%92"}})
+	if len(rehomed) != 1 || rehomed[0] != "%91" || len(parked) != 1 || parked[0] != "%92" {
+		t.Fatalf("parkPaneMsg: rehomed=%v parked=%v, want [%%91] [%%92]", rehomed, parked)
 	}
 }

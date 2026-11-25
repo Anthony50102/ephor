@@ -23,6 +23,24 @@ const (
 // file before Switchboard triggers an extra refresh.
 const restoreRefreshDelay = 1500 * time.Millisecond
 
+// parkAfterLaunchDelay waits for zsh + Copilot CLI startup color probing
+// (OSC 10/11/4) in an attached session before moving the window to agents.
+const parkAfterLaunchDelay = 3 * time.Second
+
+type parkPaneMsg struct {
+	panes []string
+}
+
+func parkAfterLaunchCmd(panes ...string) tea.Cmd {
+	if len(panes) == 0 {
+		return nil
+	}
+	cp := append([]string(nil), panes...)
+	return tea.Tick(parkAfterLaunchDelay, func(time.Time) tea.Msg {
+		return parkPaneMsg{panes: cp}
+	})
+}
+
 func (m Model) offlineIn(sc sideItem) []core.Session {
 	var out []core.Session
 	for _, s := range m.sessionsIn(sc) {
@@ -110,7 +128,7 @@ func (m *Model) removeOfflineKeys(keys ...string) {
 	m.syncSelection()
 }
 
-func (m *Model) launchRestore(s core.Session) (paneID string, fallbackDir bool, err error) {
+func (m *Model) launchRestore(s core.Session, beforeType func(string) error) (paneID string, fallbackDir bool, err error) {
 	if m.opt.Launch == nil {
 		return "", false, fmt.Errorf("restoring sessions needs tmux")
 	}
@@ -120,10 +138,11 @@ func (m *Model) launchRestore(s core.Session) (paneID string, fallbackDir bool, 
 	}
 	dir, fallback := core.ResumeDir(s.Info.Cwd)
 	req := LaunchReq{
-		Session: tmux.PoolSession,
-		Dir:     dir,
-		Window:  core.ResumeWindowName(s),
-		Command: cmd,
+		Session:    tmux.PoolSession,
+		Dir:        dir,
+		Window:     core.ResumeWindowName(s),
+		Command:    cmd,
+		BeforeType: beforeType,
 	}
 	pane, err := m.opt.Launch(req)
 	return pane, fallback, err
@@ -145,10 +164,54 @@ func (m *Model) restoreOne(s core.Session, how restoreMode) tea.Cmd {
 			return nil
 		}
 	}
-	pane, fallback, err := m.launchRestore(s)
+	// Attach or dock the fresh pane BEFORE typing the resume command so tmux
+	// can answer Copilot CLI's startup OSC 10/11/4 terminal color queries.
+	var beforeType func(string) error
+	var beforeCalled bool
+	var beforeErr error
+	switch how {
+	case restoreDock:
+		beforeType = func(paneID string) error {
+			beforeCalled = true
+			beforeErr = m.opt.Dock(paneID)
+			return beforeErr
+		}
+	case restoreJump:
+		if m.opt.Show != nil {
+			beforeType = func(paneID string) error {
+				beforeCalled = true
+				beforeErr = m.opt.Show(paneID)
+				return beforeErr
+			}
+		}
+	}
+	pane, fallback, err := m.launchRestore(s, beforeType)
 	if err != nil {
+		if beforeErr != nil && pane != "" {
+			m.removeOfflineKeys(s.Key)
+			m.wantKey = s.Key
+			if how == restoreDock {
+				m.setErr(fmt.Errorf("restored %s in %s, but could not dock: %w", s.Title(), tmux.PoolSession, beforeErr))
+			} else {
+				m.setErr(fmt.Errorf("restored %s in %s, but could not jump: %w", s.Title(), tmux.PoolSession, beforeErr))
+			}
+			return delayedRefreshCmd()
+		}
 		m.setErr(fmt.Errorf("could not restore %s: %w", s.Title(), err))
 		return nil
+	}
+	// If a custom/test Launch didn't invoke BeforeType, still dock or show now.
+	if beforeType != nil && !beforeCalled {
+		if err := beforeType(pane); err != nil {
+			m.removeOfflineKeys(s.Key)
+			m.wantKey = s.Key
+			if how == restoreDock {
+				m.setErr(fmt.Errorf("restored %s in %s, but could not dock: %w", s.Title(), tmux.PoolSession, err))
+			} else {
+				m.setErr(fmt.Errorf("restored %s in %s, but could not jump: %w", s.Title(), tmux.PoolSession, err))
+			}
+			return delayedRefreshCmd()
+		}
 	}
 	m.removeOfflineKeys(s.Key)
 	m.wantKey = s.Key
@@ -160,26 +223,20 @@ func (m *Model) restoreOne(s core.Session, how restoreMode) tea.Cmd {
 
 	switch how {
 	case restoreDock:
-		if err := m.opt.Dock(pane); err != nil {
-			m.setErr(fmt.Errorf("restored %s in %s, but could not dock: %w", s.Title(), tmux.PoolSession, err))
-			return delayedRefreshCmd()
-		}
 		m.docked, m.dockedTitle = pane, s.Title()
 		m.setStatus(fmt.Sprintf("Restored and docked %s%s. V undocks from anywhere.", s.Title(), suffix))
+		return delayedRefreshCmd()
 	case restoreJump:
 		if m.opt.Show != nil {
-			if err := m.opt.Show(pane); err != nil {
-				m.setErr(fmt.Errorf("restored %s in %s, but could not jump: %w", s.Title(), tmux.PoolSession, err))
-				return delayedRefreshCmd()
-			}
 			m.setStatus(fmt.Sprintf("Restored %s in %s%s.", s.Title(), tmux.PoolSession, suffix))
 		} else {
 			m.setStatus(fmt.Sprintf("Restored %s in %s (%s)%s.", s.Title(), tmux.PoolSession, pane, suffix))
 		}
+		return delayedRefreshCmd()
 	default:
 		m.setStatus(fmt.Sprintf("Restored %s in %s%s. Press v to dock it once ready.", s.Title(), tmux.PoolSession, suffix))
+		return tea.Batch(delayedRefreshCmd(), parkAfterLaunchCmd(pane))
 	}
-	return delayedRefreshCmd()
 }
 
 // restoreAction handles R: restores a single focused offline session in the
@@ -218,10 +275,11 @@ func (m *Model) restoreScope(includeHeld bool) tea.Cmd {
 		return nil
 	}
 	var restored []string
+	var panes []string
 	var firstErr error
 	fallbacks := 0
 	for _, s := range targets {
-		_, fb, err := m.launchRestore(s)
+		pane, fb, err := m.launchRestore(s, nil)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -229,6 +287,9 @@ func (m *Model) restoreScope(includeHeld bool) tea.Cmd {
 			continue
 		}
 		restored = append(restored, s.Key)
+		if pane != "" {
+			panes = append(panes, pane)
+		}
 		if fb {
 			fallbacks++
 		}
@@ -253,7 +314,7 @@ func (m *Model) restoreScope(includeHeld bool) tea.Cmd {
 		msg += " Some failed: " + firstErr.Error()
 	}
 	m.setStatus(msg)
-	return delayedRefreshCmd()
+	return tea.Batch(delayedRefreshCmd(), parkAfterLaunchCmd(panes...))
 }
 
 // dismissOffline removes one offline session from recovery.

@@ -267,9 +267,18 @@ func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
 		}
 	}
 	opt.Launch = func(r LaunchReq) (string, error) {
-		pane, err := src.Tmux.NewWindow(r.Session, r.Window, r.Dir)
+		session := r.Session
+		if r.BeforeType == nil && session == tmux.PoolSession {
+			session, _ = src.Tmux.LaunchSession(tmux.PoolSession)
+		}
+		pane, err := src.Tmux.NewWindow(session, r.Window, r.Dir)
 		if err != nil {
 			return "", err
+		}
+		if r.BeforeType != nil {
+			if err := r.BeforeType(pane); err != nil {
+				return pane, err
+			}
 		}
 		if err := src.Tmux.Type(pane, r.Command); err != nil || r.Pretype == "" {
 			return pane, err
@@ -609,6 +618,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case kubeMsg:
 		m.gotKube(msg)
+		return m, nil
+	case parkPaneMsg:
+		if m.opt.Park == nil {
+			return m, nil
+		}
+		movedAny := false
+		for _, pane := range msg.panes {
+			if pane == "" {
+				continue
+			}
+			if pane == m.docked {
+				if m.opt.Rehome != nil {
+					_ = m.opt.Rehome(pane)
+				}
+				continue
+			}
+			if moved, err := m.opt.Park(pane); err == nil && moved {
+				movedAny = true
+			}
+		}
+		if movedAny {
+			return m, m.refreshNow()
+		}
 		return m, nil
 	case tickMsg:
 		cmds := []tea.Cmd{tick(), m.maybePrices(), m.maybeKube(false)}
@@ -962,8 +994,8 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.inputKind == inCommand {
 			return m.runCommand(m.input.Value())
 		}
-		m.commitInput(strings.TrimSpace(m.input.Value()))
-		return m, nil
+		cmd := m.commitInput(strings.TrimSpace(m.input.Value()))
+		return m, cmd
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
@@ -974,20 +1006,21 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *Model) commitInput(v string) {
+func (m *Model) commitInput(v string) tea.Cmd {
 	now := m.opt.Now()
+	var cmd tea.Cmd
 	switch m.inputKind {
 	case inFilter:
 		m.filter = v
 		m.syncSelection()
-		return
+		return nil
 	case inNewProject:
 		m.commitNewProject(v, m.inputKey)
 	case inLaunchDir:
 		m.commitLaunchDir(v)
-		return
+		return nil
 	case inLaunchTask:
-		m.launch(m.inputKey, v)
+		cmd = m.launch(m.inputKey, v)
 	case inNewThread:
 		var tid string
 		pid := m.inputPID
@@ -1003,7 +1036,7 @@ func (m *Model) commitInput(v string) {
 			}
 			return nil
 		}) {
-			return
+			return nil
 		}
 		m.rebuildSide()
 		if m.inputKey == "" {
@@ -1021,7 +1054,7 @@ func (m *Model) commitInput(v string) {
 	case inRename:
 		if v == "" {
 			m.setErr(fmt.Errorf("name is empty"))
-			return
+			return nil
 		}
 		pid, tid := m.inputPID, m.inputTID
 		m.change(func(st *store.State) error {
@@ -1039,6 +1072,7 @@ func (m *Model) commitInput(v string) {
 		m.commitHoldNote(v)
 	}
 	m.syncSelection()
+	return cmd
 }
 
 // ---- relative line numbers ----
