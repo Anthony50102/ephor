@@ -223,7 +223,7 @@ func (m *Model) restoreOne(s core.Session, how restoreMode) tea.Cmd {
 
 	switch how {
 	case restoreDock:
-		m.docked, m.dockedTitle = pane, s.Title()
+		m.docked, m.dockedTitle, m.dockedAt = pane, s.Title(), m.opt.Now()
 		m.setStatus(fmt.Sprintf("Restored and docked %s%s. V undocks from anywhere.", s.Title(), suffix))
 		return delayedRefreshCmd()
 	case restoreJump:
@@ -341,4 +341,68 @@ func (m *Model) dismissScopeOffline() {
 	} else {
 		m.setStatus(fmt.Sprintf("Dismissed %s.", plural(len(keys), "offline session")))
 	}
+}
+
+// reopenAssigned finds closed sessions still assigned to the current scope
+// (or matching query) in state.json and re-adds them to snapshot.json's
+// Recoverable list so they can be resumed with v/enter/R.
+func (m *Model) reopenAssigned(query string) tea.Cmd {
+	if m.opt.LookupSaved == nil {
+		m.setStatus("Reopening closed sessions is unavailable here.")
+		return nil
+	}
+	present := make(map[string]bool, len(m.sessions))
+	for _, s := range m.sessions {
+		present[s.Key] = true
+	}
+	sc, label := m.restoreTargetScope()
+	q := strings.ToLower(strings.TrimSpace(query))
+	var found []store.SavedSession
+	for key, a := range m.st.Assign {
+		if present[key] || m.st.Project(a.Project) == nil {
+			continue
+		}
+		switch sc.kind {
+		case sideProject:
+			if a.Project != sc.pid {
+				continue
+			}
+		case sideThread:
+			if a.Project != sc.pid || a.Thread != sc.tid {
+				continue
+			}
+		}
+		sv, ok := m.opt.LookupSaved(key, a)
+		if !ok {
+			continue
+		}
+		if q != "" {
+			hay := strings.ToLower(sv.Title + " " + a.Label + " " + m.placeName(a.Project, a.Thread) + " " + sv.ID)
+			if !strings.Contains(hay, q) {
+				continue
+			}
+		}
+		found = append(found, sv)
+	}
+	if len(found) == 0 {
+		if q != "" {
+			m.setStatus(fmt.Sprintf("No closed assigned sessions match %q.", query))
+		} else if label != "" {
+			m.setStatus("No closed assigned sessions to reopen in " + label + ".")
+		} else {
+			m.setStatus("No closed assigned sessions to reopen.")
+		}
+		return nil
+	}
+	if m.opt.SnapshotPath != "" {
+		_, _ = store.UpdateSnapshot(m.opt.SnapshotPath, func(s *store.Snapshot) (bool, error) {
+			return s.AddRecoverable(found...), nil
+		})
+	}
+	if label != "" {
+		m.setStatus(fmt.Sprintf("Brought back %s in %s as offline (v/enter/R to resume).", plural(len(found), "closed session"), label))
+	} else {
+		m.setStatus(fmt.Sprintf("Brought back %s as offline (v/enter/R to resume).", plural(len(found), "closed session")))
+	}
+	return m.refreshNow()
 }

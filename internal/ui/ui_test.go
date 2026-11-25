@@ -1467,4 +1467,47 @@ func TestOfflineRestoreAndDismissWorkflow(t *testing.T) {
 	if len(rehomed) != 1 || rehomed[0] != "%91" || len(parked) != 1 || parked[0] != "%92" {
 		t.Fatalf("parkPaneMsg: rehomed=%v parked=%v, want [%%91] [%%92]", rehomed, parked)
 	}
+
+	// Regression: a refresh firing right after v-docking an offline session
+	// (before zsh finishes starting copilot) must NOT forget m.docked.
+	var undocked []string
+	h.m.opt.Undock = func(paneID string) error { undocked = append(undocked, paneID); return nil }
+	h.m.opt.PaneExists = func(paneID string) bool { return paneID == "%94" }
+	h.m.opt.Dock = func(paneID string) error { return nil }
+	h.m.docked, h.m.dockedTitle = "", ""
+	h.m.sessions = []core.Session{offActive}
+	h.m.syncSelectionTo(offActive.Key)
+	h.m.focus = focusSessions
+	h.keys("v") // launches %94 and docks it
+	if h.m.docked != "%94" {
+		t.Fatalf("expected %%94 docked, got %q", h.m.docked)
+	}
+	// Immediate poll before %94 appears as a live agent must keep m.docked.
+	h.send(sessionsMsg{ss: nil})
+	if h.m.docked != "%94" {
+		t.Fatalf("dockGone dropped booting docked pane: docked=%q", h.m.docked)
+	}
+	// V still undocks it cleanly, and if m.docked was lost, DockedPane recovers it.
+	h.m.docked = ""
+	h.m.opt.DockedPane = func() string { return "%94" }
+	h.keys("V")
+	if len(undocked) != 1 || undocked[0] != "%94" {
+		t.Fatalf("V should recover and undock %%94 via DockedPane, got %v", undocked)
+	}
+
+	// :reopen brings back closed assigned sessions into snapshot.json Recoverable.
+	h.m.opt.LookupSaved = func(key string, a store.Assignment) (store.SavedSession, bool) {
+		if key == offActive.Key {
+			return store.SavedSession{Key: offActive.Key, Kind: "copilot", ID: offActive.Info.ID, Title: "pt train", Cwd: dir, SeenAt: now}, true
+		}
+		return store.SavedSession{}, false
+	}
+	h.m.sessions = nil
+	h.keys(":")
+	h.typeText("reopen")
+	h.keys("enter")
+	loaded, err = store.LoadSnapshot(snapPath)
+	if err != nil || len(loaded.Recoverable) != 1 || loaded.Recoverable[0].Key != offActive.Key {
+		t.Fatalf(":reopen should re-add closed assigned session to snapshot.json, got %+v err=%v", loaded.Recoverable, err)
+	}
 }

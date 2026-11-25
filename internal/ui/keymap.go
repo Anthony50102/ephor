@@ -450,6 +450,8 @@ func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
 		return m, m.parkAll()
 	case "restore":
 		return m, m.restoreScope(arg == "all")
+	case "reopen":
+		return m, m.reopenAssigned(arg)
 	case "dismiss":
 		if arg == "all" {
 			m.dismissScopeOffline()

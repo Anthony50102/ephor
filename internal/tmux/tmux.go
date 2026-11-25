@@ -393,6 +393,46 @@ func (c Client) windowExists(id string) bool {
 	return false
 }
 
+// PaneExists reports whether paneID still exists on the tmux server.
+func (c Client) PaneExists(paneID string) bool {
+	if paneID == "" {
+		return false
+	}
+	out, err := c.Run("list-panes", "-a", "-F", "#{pane_id}")
+	if err != nil {
+		return false
+	}
+	for _, id := range strings.Fields(out) {
+		if id == paneID {
+			return true
+		}
+	}
+	return false
+}
+
+// DockedTo returns the pane ID of a live pane currently docked beside hostPane
+// (marked with @switchboard-home), or empty if none is found.
+func (c Client) DockedTo(hostPane string) string {
+	if hostPane == "" {
+		return ""
+	}
+	out, err := c.Run("list-panes", "-a", "-F", "#{pane_id}"+sep+"#{"+homeOpt+"}")
+	if err != nil {
+		return ""
+	}
+	for _, l := range strings.Split(out, "\n") {
+		id, home, _ := strings.Cut(l, sep)
+		if id == "" || home == "" {
+			continue
+		}
+		f := strings.Split(home, sep)
+		if len(f) >= 5 && f[4] == hostPane {
+			return id
+		}
+	}
+	return ""
+}
+
 // Orphans lists docked panes whose Switchboard pane has closed, as after a
 // crash, so they can be sent back.
 func (c Client) Orphans() ([]string, error) {

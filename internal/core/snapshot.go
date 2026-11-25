@@ -91,6 +91,47 @@ func HydrateSaved(saved []store.SavedSession, src Sources) []Session {
 	return out
 }
 
+// SavedFromAssigned looks up an assigned session key (copilot:<id>) on disk so
+// a previously closed session can be reopened.
+func SavedFromAssigned(key string, a store.Assignment, src Sources) (store.SavedSession, bool) {
+	kind, id, ok := strings.Cut(key, ":")
+	if !ok || id == "" {
+		return store.SavedSession{}, false
+	}
+	switch kind {
+	case procs.Copilot:
+		if src.Copilot == nil {
+			return store.SavedSession{}, false
+		}
+		info, err := src.Copilot.Read(id)
+		if err != nil && info.Name == "" && info.Cwd == "" && info.UpdatedAt.IsZero() {
+			return store.SavedSession{}, false
+		}
+		if info.Name == "" && info.Cwd == "" && info.UpdatedAt.IsZero() {
+			return store.SavedSession{}, false
+		}
+		title := info.Name
+		if title == "" {
+			title = a.Label
+		}
+		seen := info.UpdatedAt
+		if seen.IsZero() {
+			seen = a.At
+		}
+		return store.SavedSession{
+			Key:    key,
+			Kind:   kind,
+			ID:     id,
+			Title:  title,
+			Cwd:    info.Cwd,
+			Repo:   info.Repo,
+			Branch: info.Branch,
+			SeenAt: seen,
+		}, true
+	}
+	return store.SavedSession{}, false
+}
+
 func mergeSavedInfo(info *agents.Info, sv store.SavedSession) {
 	if info.Kind == "" {
 		info.Kind = sv.Kind

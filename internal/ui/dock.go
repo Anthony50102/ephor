@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/anthonypoole/switchboard/internal/tmux"
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,14 +11,37 @@ import (
 // dockWidth is the docked agent's share of the window.
 const dockWidth = "55%"
 
+// dockGrace keeps a freshly docked pane tracked while zsh starts copilot/claude
+// when PaneExists is unavailable (such as in tests).
+const dockGrace = 10 * time.Second
+
 // Docking moves an agent's real tmux pane beside Switchboard, so you work
 // in the agent itself, then sends it back to its own window.
+
+func (m *Model) recoverDocked() {
+	if m.docked != "" || m.opt.DockedPane == nil {
+		return
+	}
+	if id := m.opt.DockedPane(); id != "" {
+		m.docked = id
+		if m.dockedTitle == "" {
+			m.dockedTitle = "docked pane"
+		}
+		for _, s := range m.sessions {
+			if s.Pane.PaneID == id {
+				m.dockedTitle = s.Title()
+				break
+			}
+		}
+	}
+}
 
 func (m *Model) toggleDock() tea.Cmd {
 	if m.opt.Dock == nil || m.opt.Undock == nil {
 		m.setErr(fmt.Errorf("docking an agent needs Switchboard running inside tmux"))
 		return nil
 	}
+	m.recoverDocked()
 	s, ok := m.selected()
 	if ok && s.Offline {
 		return m.restoreOne(s, restoreDock)
@@ -36,7 +60,7 @@ func (m *Model) toggleDock() tea.Cmd {
 		m.setErr(err)
 		return nil
 	}
-	m.docked, m.dockedTitle = s.Pane.PaneID, s.Title()
+	m.docked, m.dockedTitle, m.dockedAt = s.Pane.PaneID, s.Title(), time.Time{}
 	m.setStatus("Docked " + s.Title() + ". Pane keys move between it and here; V undocks from anywhere.")
 	return nil
 }
@@ -44,6 +68,7 @@ func (m *Model) toggleDock() tea.Cmd {
 // undockAny sends the currently docked agent back to its window from anywhere,
 // regardless of which project, panel, or session is selected.
 func (m *Model) undockAny() {
+	m.recoverDocked()
 	if m.docked == "" {
 		m.setStatus("Nothing is docked.")
 		return
@@ -62,13 +87,25 @@ func (m *Model) undock() bool {
 		return false
 	}
 	m.setStatus("Sent " + m.dockedTitle + " back to its window.")
-	m.docked, m.dockedTitle = "", ""
+	m.docked, m.dockedTitle, m.dockedAt = "", "", time.Time{}
 	return true
 }
 
-// dockGone forgets a docked agent whose pane has closed.
+// dockGone forgets a docked agent only when its tmux pane has actually closed,
+// not merely while a restored pane is still booting zsh -> copilot or sitting
+// at a shell prompt.
 func (m *Model) dockGone() {
 	if m.docked == "" || !m.loaded {
+		return
+	}
+	if m.opt.PaneExists != nil {
+		if m.opt.PaneExists(m.docked) {
+			return
+		}
+		m.docked, m.dockedTitle, m.dockedAt = "", "", time.Time{}
+		return
+	}
+	if !m.dockedAt.IsZero() && m.opt.Now().Sub(m.dockedAt) < dockGrace {
 		return
 	}
 	for _, s := range m.sessions {
@@ -76,7 +113,7 @@ func (m *Model) dockGone() {
 			return
 		}
 	}
-	m.docked, m.dockedTitle = "", ""
+	m.docked, m.dockedTitle, m.dockedAt = "", "", time.Time{}
 }
 
 // Docked is the pane still docked when the program ends, for Run to send back.

@@ -106,9 +106,16 @@ type Options struct {
 	Show   func(paneID string) error // switch to a pane; nil outside tmux
 
 	// Dock moves an agent's pane beside Switchboard and Undock sends it
-	// back. Nil outside tmux.
-	Dock   func(paneID string) error
-	Undock func(paneID string) error
+	// back. PaneExists and DockedPane inspect tmux directly so docking stays
+	// tracked even while a restored pane is still booting zsh -> copilot.
+	Dock       func(paneID string) error
+	Undock     func(paneID string) error
+	PaneExists func(paneID string) bool
+	DockedPane func() string
+
+	// LookupSaved resolves a closed assigned session key from disk so :reopen
+	// can bring it back into Recoverable.
+	LookupSaved func(key string, a store.Assignment) (store.SavedSession, bool)
 
 	// Park moves an agent pane into the background agents pool session.
 	// Rehome updates a docked pane's saved return address to that pool.
@@ -204,6 +211,7 @@ type Model struct {
 
 	docked      string // pane ID of the agent docked beside us
 	dockedTitle string
+	dockedAt    time.Time
 
 	JumpTarget *tmux.Pane
 }
@@ -287,11 +295,16 @@ func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
 	}
 	self := os.Getenv("TMUX_PANE")
 	opt.Park = func(id string) (bool, error) { return src.Tmux.Park(id, tmux.PoolSession, self) }
+	opt.PaneExists = src.Tmux.PaneExists
+	opt.LookupSaved = func(key string, a store.Assignment) (store.SavedSession, bool) {
+		return core.SavedFromAssigned(key, a, src)
+	}
 	if tmux.InsideTmux() {
 		opt.Show = src.Tmux.Show
 		if self != "" {
 			opt.Dock = func(id string) error { return src.Tmux.Dock(id, self, dockWidth) }
 			opt.Undock = src.Tmux.Undock
+			opt.DockedPane = func() string { return src.Tmux.DockedTo(self) }
 			opt.Rehome = func(id string) error { return src.Tmux.Rehome(id, tmux.PoolSession) }
 			opt.SelectPane = func(dir string) error { return src.Tmux.SelectPane(self, dir) }
 			// Agents left docked by a Switchboard that crashed go home.
@@ -309,8 +322,12 @@ func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
 		return nil, err
 	}
 	fm := final.(Model)
-	if id := fm.Docked(); id != "" && opt.Undock != nil {
-		if err := opt.Undock(id); err != nil {
+	dockID := fm.Docked()
+	if dockID == "" && opt.DockedPane != nil {
+		dockID = opt.DockedPane()
+	}
+	if dockID != "" && opt.Undock != nil {
+		if err := opt.Undock(dockID); err != nil {
 			return nil, err
 		}
 	}

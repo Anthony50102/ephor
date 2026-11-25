@@ -176,6 +176,24 @@ func (s *Snapshot) Sync(serverID string, live []SavedSession, now time.Time) boo
 	return changed
 }
 
+// AddRecoverable merges items into Recoverable (ignoring any already live on
+// this server) and reports whether Recoverable changed.
+func (s *Snapshot) AddRecoverable(items ...SavedSession) bool {
+	if len(items) == 0 {
+		return false
+	}
+	liveKeys := make(map[string]bool, len(s.Live))
+	for _, it := range s.Live {
+		liveKeys[it.Key] = true
+	}
+	merged := mergeSaved(s.Recoverable, items, liveKeys)
+	if sameSavedList(s.Recoverable, merged) {
+		return false
+	}
+	s.Recoverable = merged
+	return true
+}
+
 // Dismiss removes keys from Recoverable.
 func (s *Snapshot) Dismiss(keys ...string) bool {
 	if len(keys) == 0 || len(s.Recoverable) == 0 {
