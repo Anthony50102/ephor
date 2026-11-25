@@ -5,7 +5,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/anthonypoole/switchboard/internal/tmux"
+	"github.com/Anthony50102/ephor/internal/tmux"
 )
 
 // Clipboard copies text to the tmux paste buffer, when inside tmux, and to

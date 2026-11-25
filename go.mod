@@ -1,4 +1,4 @@
-module github.com/anthonypoole/switchboard
+module github.com/Anthony50102/ephor
 
 go 1.24.2
 

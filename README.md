@@ -1,4 +1,4 @@
-# Switchboard
+# Ephor
 
 A keyboard-first control panel for the GitHub Copilot CLI and Claude Code
 sessions you run in tmux. It answers three questions without making you scroll
@@ -17,25 +17,26 @@ Works on Linux and macOS. It only reads state; it never types into your agents.
 Requires Go 1.24+ and tmux 3.2+.
 
 ```sh
-go build -o ~/.local/bin/switchboard ./cmd/switchboard
+go build -o ~/.local/bin/ephor ./cmd/ephor
 ```
 
 Optional tmux binding that opens the panel in its own window, or returns to it
 if it is already open:
 
 ```tmux
-bind-key S new-window -S -n switchboard switchboard
+bind-key E new-window -S -n ephor ephor
 ```
 
 ## Use
 
 ```sh
-switchboard          # open the panel
-switchboard list     # print sessions as a table
-switchboard list --json
-switchboard summarize nabu            # write one project's summary now
-switchboard summarize --dry-run nabu  # print the prompt the model would see
-switchboard cloud nabu                # every cloud resource the project's sessions touched, checked with Azure
+ephor          # open the panel
+ephor list     # print sessions as a table
+ephor list --json
+ephor restore [--all] [--dry-run]     # resume offline sessions after a reboot
+ephor summarize nabu            # write one project's summary now
+ephor summarize --dry-run nabu  # print the prompt the model would see
+ephor cloud nabu                # every cloud resource the project's sessions touched, checked with Azure
 ```
 
 New sessions appear in **Unassigned**. Create a project with `n`, describe it
@@ -45,7 +46,7 @@ session's window; outside tmux it attaches.
 
 ### Starting and steering agents
 
-Press `o` in a project or thread to start Copilot there. Switchboard asks for
+Press `o` in a project or thread to start Copilot there. Ephor asks for
 the folder (it suggests where that project's latest session runs) and an
 optional first task. It then opens a new tmux window in a detached `agents`
 session (keeping your main tmux window bar clean) and types this into it:
@@ -54,11 +55,11 @@ session (keeping your main tmux window bar clean) and types this into it:
 copilot --session-id <new uuid> --name '<project or thread>' -i '<task>'
 ```
 
-Switchboard chooses the session ID, so the session is filed under the project
+Ephor chooses the session ID, so the session is filed under the project
 before Copilot starts. It appears and is selected within a few seconds. The
 command is typed into a shell rather than run directly, so your shell setup
 applies and the window keeps a shell when Copilot exits. Agents still live in
-tmux, so they keep running when Switchboard closes.
+tmux, so they keep running when Ephor closes.
 
 Press `i` on a session to type to it without leaving. The middle pane shows a
 live view of its terminal. `enter` sends your text and presses Enter, so `1`
@@ -66,20 +67,20 @@ then `enter` answers a numbered approval prompt. `enter` on an empty line only
 presses Enter. `esc` returns to the panel. It is for quick one-line answers.
 
 For real work, press `v` to dock the session: its actual tmux pane moves into
-Switchboard's window, on the right, and takes the keyboard. You are typing in
+Ephor's window, on the right, and takes the keyboard. You are typing in
 the agent itself, with multi-line input, paste, and scrollback. Move between
-it and Switchboard with your usual tmux pane keys (`ctrl-h` / `ctrl-l` with
+it and Ephor with your usual tmux pane keys (`ctrl-h` / `ctrl-l` with
 vim-tmux-navigator). `V` (or `:undock`) sends the docked session back from
-anywhere in Switchboard; `v` on the same session also sends it back, and `v` on
+anywhere in Ephor; `v` on the same session also sends it back, and `v` on
 another session swaps. Docking only moves the pane, so the agent never notices.
-Quitting Switchboard sends a docked agent back, and if Switchboard crashes,
-the next start sends it back. Docking needs Switchboard running inside tmux.
+Quitting Ephor sends a docked agent back, and if Ephor crashes,
+the next start sends it back. Docking needs Ephor running inside tmux.
 
 To clear existing agent windows out of your main tmux session, press `P` (or
 `:park-all`) to move every live agent window into the background `agents`
 session without touching your regular shells. Press `p` (or `:park`) to park
 just the selected session. If an agent is currently docked when you run `P`,
-it stays open beside Switchboard and returns to `agents` when you undock it.
+it stays open beside Ephor and returns to `agents` when you undock it.
 
 Keys follow LazyVim and the Snacks explorer, including Vim count prefixes
 (`10j`, `5k`, `5G`, `3ctrl-e`, `2L`, `2]d`). Press `space` for a which-key menu
@@ -106,7 +107,7 @@ With the sessions panel hidden, the list moves into the bottom of the brief.
 | `ctrl-d` / `ctrl-u`, `ctrl-e` / `ctrl-y`, mouse wheel | scroll the middle pane by half a page or a line. The wheel over the sidebar or session list moves the selection. Hold `shift` to select text with the mouse. |
 | `enter` in the sessions panel | jump to the session's tmux window |
 | `i` / `o` | type a quick answer to the session / start Copilot in this project or thread |
-| `v` | dock the session's real terminal beside Switchboard; `v` again sends it back |
+| `v` | dock the session's real terminal beside Ephor; `v` again sends it back |
 | `p` / `P` | park this session / all live agent windows into the background `agents` tmux session |
 | `m` / `a` | move session to a project / accept suggestion |
 | `n` `t` `e` `r` `d` | new project, new thread, describe, rename, delete |
@@ -117,15 +118,15 @@ With the sessions panel hidden, the list moves into the bottom of the brief.
 | `:q`, `:new <name>`, `:park`, `:park-all`, `:help` | command line |
 | `space`, `?` | which-key menu, all keys |
 
-`ctrl-h` and `ctrl-l` only reach Switchboard if your tmux
-`vim-tmux-navigator` check treats it like Vim. Add `switchboard` to the
-process pattern. Like Neovim, Switchboard then moves between its own panels
+`ctrl-h` and `ctrl-l` only reach Ephor if your tmux
+`vim-tmux-navigator` check treats it like Vim. Add `ephor` to the
+process pattern. Like Neovim, Ephor then moves between its own panels
 first and hands off to tmux at the edge. When the window is narrow, the cards
 panel counts as the right edge, so one `ctrl-l` reaches a docked agent.
 The pattern:
 
 ```tmux
-vim_pattern='([^[:space:]]+/)?g?\.?(view|l?n?vim?x?|fzf|switchboard)(diff)?(-wrapped)?'
+vim_pattern='([^[:space:]]+/)?g?\.?(view|l?n?vim?x?|fzf|ephor)(diff)?(-wrapped)?'
 ```
 
 Colors are fixed in meaning: amber needs you, green is working, cyan is
@@ -134,7 +135,7 @@ day). The palette is Tokyo Night Moon.
 
 ## How it works
 
-Every 3 seconds Switchboard lists tmux panes, walks each pane's process tree to
+Every 3 seconds Ephor lists tmux panes, walks each pane's process tree to
 find `copilot` or `claude`, and reads that agent's own session files.
 
 - **Copilot CLI.** Each running process holds
@@ -144,7 +145,7 @@ find `copilot` or `claude`, and reads that agent's own session files.
   means ready, anything else in flight means working. Logs can be gigabytes,
   so they are read backward from the end and cached until they change.
 - **Claude Code.** Transcripts live in `~/.claude/projects/<encoded cwd>/`.
-  When exactly one Claude process runs in a directory, Switchboard uses the
+  When exactly one Claude process runs in a directory, Ephor uses the
   newest transcript written since that process started. Approval prompts are
   not logged, so it also checks the bottom of the pane for a prompt.
 
@@ -153,9 +154,9 @@ session keeps its project when you resume it somewhere else. Sessions without
 a known ID fall back to their tmux pane.
 
 Projects, threads, and assignments are stored in
-`$XDG_STATE_HOME/switchboard/state.json` (default
-`~/.local/state/switchboard/state.json`). Use `--state` to point elsewhere.
-If the file cannot be parsed, Switchboard exits rather than overwrite it. You can run several
+`$XDG_STATE_HOME/ephor/state.json` (default
+`~/.local/state/ephor/state.json`). Use `--state` to point elsewhere.
+If the file cannot be parsed, Ephor exits rather than overwrite it. You can run several
 panels at once: each edit locks the file, rereads it, and applies only that
 edit, and every refresh picks up edits made elsewhere.
 
@@ -170,7 +171,7 @@ edit).
 
 - **Input.** For each session in the project: its state, its last few asks,
   its last two completion summaries, and the agent's latest message. Long text
-  is clipped. Run `switchboard summarize --dry-run <project>` to see the exact
+  is clipped. Run `ephor summarize --dry-run <project>` to see the exact
   prompt.
 - **When.** Only when that input changes, and at most once per project every
   5 minutes (`--summary-every`). One call runs at a time, starting with the
@@ -182,8 +183,8 @@ edit).
 
 | Flag | Env | Default |
 | --- | --- | --- |
-| `--summarizer` | `SWITCHBOARD_SUMMARIZER` | `auto`: `copilot` if on PATH, else off. Also `copilot`, `off`, or any shell command that reads the prompt on stdin and prints JSON, for example `'claude -p --model haiku'`. |
-| `--summary-model` | `SWITCHBOARD_SUMMARY_MODEL` | `claude-haiku-4.5` |
+| `--summarizer` | `EPHOR_SUMMARIZER` | `auto`: `copilot` if on PATH, else off. Also `copilot`, `off`, or any shell command that reads the prompt on stdin and prints JSON, for example `'claude -p --model haiku'`. |
+| `--summary-model` | `EPHOR_SUMMARY_MODEL` | `claude-haiku-4.5` |
 | `--summary-every` | | `5m` |
 
 Things to know:
@@ -192,7 +193,7 @@ Things to know:
   CLI, the same one your agents already use.
 - Each Copilot summary call is a real Copilot session, so these short sessions
   appear in `copilot --resume` history. They run from
-  `~/.local/state/switchboard/summarizer`, so they are easy to tell apart.
+  `~/.local/state/ephor/summarizer`, so they are easy to tell apart.
 - Summaries are cached in `summaries.json` next to the state file. Deleting it
   is safe.
 
@@ -205,7 +206,7 @@ Kubernetes jobs, model deployments, registries, storage, SSH hosts, and so on.
 Each row says whether the agent created, used, or deleted it, and when.
 
 It comes from the shell commands the agents ran (`az`, `kubectl`, `helm`,
-`ssh`, `scp`, `rsync`), read from their session logs. Then Switchboard asks
+`ssh`, `scp`, `rsync`), read from their session logs. Then Ephor asks
 Azure what is still there (see below). From the logs alone:
 
 - A row means the agent named that resource in a command, not that it still
@@ -229,7 +230,7 @@ paragraph can say things like "training is running on the ring1 cluster."
 
 ### Checking with Azure
 
-When `az` is installed and logged in, Switchboard sends one
+When `az` is installed and logged in, Ephor sends one
 [Azure Resource Graph](https://learn.microsoft.com/azure/governance/resource-graph/)
 query (`az graph query`) for every resource the logs named. It takes about a
 second, covers every subscription you can read, and runs again every 10
@@ -272,8 +273,8 @@ Limits:
   those differ, it is just not checked.
 - "gone" can also mean the resource is in a subscription you cannot read.
 
-`--live off` (or `SWITCHBOARD_LIVE=off`) turns it off; `--live on` fails if
-`az` is missing. `switchboard cloud` and `summarize` use it too, and the
+`--live off` (or `EPHOR_LIVE=off`) turns it off; `--live on` fails if
+`az` is missing. `ephor cloud` and `summarize` use it too, and the
 summarizer is told what Azure said.
 
 ### Cost

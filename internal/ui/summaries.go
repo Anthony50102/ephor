@@ -7,11 +7,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/anthonypoole/switchboard/internal/agents"
-	"github.com/anthonypoole/switchboard/internal/cloud"
-	"github.com/anthonypoole/switchboard/internal/core"
-	"github.com/anthonypoole/switchboard/internal/store"
-	"github.com/anthonypoole/switchboard/internal/summary"
+	"github.com/Anthony50102/ephor/internal/agents"
+	"github.com/Anthony50102/ephor/internal/cloud"
+	"github.com/Anthony50102/ephor/internal/core"
+	"github.com/Anthony50102/ephor/internal/store"
+	"github.com/Anthony50102/ephor/internal/summary"
 )
 
 // DefaultSummaryEvery is the shortest gap between automatic rewrites of one
@@ -130,7 +130,7 @@ func (m *Model) maybeSummarize() tea.Cmd {
 		return nil
 	}
 	if m.opt.SummaryPath != "" {
-		// Another Switchboard may have just written one.
+		// Another Ephor may have just written one.
 		m.sums = summary.LoadCache(m.opt.SummaryPath)
 	}
 	now := m.opt.Now()

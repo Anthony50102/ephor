@@ -57,7 +57,7 @@ func Exec(args ...string) (string, error) {
 	return string(out), nil
 }
 
-// Client wraps a Runner with the operations Switchboard needs.
+// Client wraps a Runner with the operations Ephor needs.
 type Client struct{ Run Runner }
 
 // ListPanes returns every pane on the tmux server.
@@ -70,7 +70,7 @@ func (c Client) ListPanes() ([]Pane, error) {
 }
 
 // ServerID identifies the running tmux server instance using its PID and start
-// time, so Switchboard can distinguish closing one window from a tmux restart
+// time, so Ephor can distinguish closing one window from a tmux restart
 // or machine reboot.
 func (c Client) ServerID() (string, error) {
 	out, err := c.Run("display-message", "-p", "#{pid}:#{start_time}")
@@ -145,13 +145,13 @@ func (c Client) Pretype(paneID, text string) error {
 	return err
 }
 
-// PoolSession is the background tmux session where Switchboard parks agent
+// PoolSession is the background tmux session where Ephor parks agent
 // windows so the user's main session stays uncluttered.
 const PoolSession = "agents"
 
 // homeOpt is a pane option holding where a docked pane came from, so it can
-// go back even after Switchboard restarts.
-const homeOpt = "@switchboard-home"
+// go back even after Ephor restarts.
+const homeOpt = "@ephor-home"
 
 func exactSession(s string) string {
 	if s == "" || strings.HasPrefix(s, "$") {
@@ -411,7 +411,7 @@ func (c Client) PaneExists(paneID string) bool {
 }
 
 // DockedTo returns the pane ID of a live pane currently docked beside hostPane
-// (marked with @switchboard-home), or empty if none is found.
+// (marked with @ephor-home), or empty if none is found.
 func (c Client) DockedTo(hostPane string) string {
 	if hostPane == "" {
 		return ""
@@ -433,7 +433,7 @@ func (c Client) DockedTo(hostPane string) string {
 	return ""
 }
 
-// Orphans lists docked panes whose Switchboard pane has closed, as after a
+// Orphans lists docked panes whose Ephor pane has closed, as after a
 // crash, so they can be sent back.
 func (c Client) Orphans() ([]string, error) {
 	out, err := c.Run("list-panes", "-a", "-F", "#{pane_id}"+sep+"#{"+homeOpt+"}")
@@ -481,7 +481,7 @@ func (c Client) Screen(paneID string) (string, error) {
 // NewWindow opens a detached window in session (the current or first session
 // when empty) and returns its pane ID. If a named session does not exist yet,
 // it creates that detached session with the new window. With no tmux server
-// running it starts a detached session named "switchboard".
+// running it starts a detached session named "ephor".
 func (c Client) NewWindow(session, name, dir string) (string, error) {
 	if session != "" && !strings.HasPrefix(session, "$") && !c.hasSession(session) {
 		out, err := c.Run("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", session, "-n", name, "-c", dir)
@@ -491,7 +491,7 @@ func (c Client) NewWindow(session, name, dir string) (string, error) {
 	if session == "" && !InsideTmux() {
 		out, err := c.Run("list-sessions", "-F", "#{session_id}")
 		if err != nil || strings.TrimSpace(out) == "" {
-			out, err := c.Run("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", "switchboard", "-n", name, "-c", dir)
+			out, err := c.Run("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", "ephor", "-n", name, "-c", dir)
 			return strings.TrimSpace(out), err
 		}
 		session, _, _ = strings.Cut(strings.TrimSpace(out), "\n")

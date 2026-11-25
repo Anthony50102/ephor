@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anthonypoole/switchboard/internal/agents"
-	"github.com/anthonypoole/switchboard/internal/cloud"
-	"github.com/anthonypoole/switchboard/internal/core"
-	"github.com/anthonypoole/switchboard/internal/store"
-	"github.com/anthonypoole/switchboard/internal/summary"
-	"github.com/anthonypoole/switchboard/internal/tmux"
+	"github.com/Anthony50102/ephor/internal/agents"
+	"github.com/Anthony50102/ephor/internal/cloud"
+	"github.com/Anthony50102/ephor/internal/core"
+	"github.com/Anthony50102/ephor/internal/store"
+	"github.com/Anthony50102/ephor/internal/summary"
+	"github.com/Anthony50102/ephor/internal/tmux"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -105,7 +105,7 @@ type Options struct {
 	Screen func(paneID string) (string, error)
 	Show   func(paneID string) error // switch to a pane; nil outside tmux
 
-	// Dock moves an agent's pane beside Switchboard and Undock sends it
+	// Dock moves an agent's pane beside Ephor and Undock sends it
 	// back. PaneExists and DockedPane inspect tmux directly so docking stays
 	// tracked even while a restored pane is still booting zsh -> copilot.
 	Dock       func(paneID string) error
@@ -122,7 +122,7 @@ type Options struct {
 	Park   func(paneID string) (bool, error)
 	Rehome func(paneID string) error
 
-	// SelectPane moves to the tmux pane beside Switchboard's.
+	// SelectPane moves to the tmux pane beside Ephor's.
 	SelectPane func(dir string) error
 
 	// Prices fetches Azure list prices; nil hides costs. PricePath caches
@@ -307,7 +307,7 @@ func Run(src core.Sources, opt Options) (*tmux.Pane, error) {
 			opt.DockedPane = func() string { return src.Tmux.DockedTo(self) }
 			opt.Rehome = func(id string) error { return src.Tmux.Rehome(id, tmux.PoolSession) }
 			opt.SelectPane = func(dir string) error { return src.Tmux.SelectPane(self, dir) }
-			// Agents left docked by a Switchboard that crashed go home.
+			// Agents left docked by a Ephor that crashed go home.
 			if ids, err := src.Tmux.Orphans(); err == nil {
 				for _, id := range ids {
 					_ = src.Tmux.Undock(id)
@@ -355,7 +355,7 @@ func (m Model) Init() tea.Cmd {
 }
 
 // change applies a state edit. With a state file it reloads the file under a
-// lock first, so edits from other Switchboard instances are kept.
+// lock first, so edits from other Ephor instances are kept.
 func (m *Model) change(fn func(*store.State) error) bool {
 	if m.opt.StatePath == "" {
 		if err := fn(m.st); err != nil {
@@ -377,7 +377,7 @@ func (m *Model) change(fn func(*store.State) error) bool {
 	return true
 }
 
-// reload picks up edits made by another Switchboard instance.
+// reload picks up edits made by another Ephor instance.
 func (m *Model) reload() {
 	if m.opt.StatePath == "" {
 		return

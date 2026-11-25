@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anthonypoole/switchboard/internal/core"
-	"github.com/anthonypoole/switchboard/internal/store"
-	"github.com/anthonypoole/switchboard/internal/tmux"
+	"github.com/Anthony50102/ephor/internal/core"
+	"github.com/Anthony50102/ephor/internal/store"
+	"github.com/Anthony50102/ephor/internal/tmux"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -20,7 +20,7 @@ const (
 )
 
 // restoreRefreshDelay gives a newly launched CLI a moment to acquire its lock
-// file before Switchboard triggers an extra refresh.
+// file before Ephor triggers an extra refresh.
 const restoreRefreshDelay = 1500 * time.Millisecond
 
 // parkAfterLaunchDelay waits for zsh + Copilot CLI startup color probing
@@ -153,11 +153,11 @@ func delayedRefreshCmd() tea.Cmd {
 }
 
 // restoreOne resumes a single offline session in the agents pool, optionally
-// jumping to it or docking it beside Switchboard.
+// jumping to it or docking it beside Ephor.
 func (m *Model) restoreOne(s core.Session, how restoreMode) tea.Cmd {
 	if how == restoreDock {
 		if m.opt.Dock == nil || m.opt.Undock == nil {
-			m.setErr(fmt.Errorf("docking an agent needs Switchboard running inside tmux"))
+			m.setErr(fmt.Errorf("docking an agent needs Ephor running inside tmux"))
 			return nil
 		}
 		if m.docked != "" && !m.undock() {

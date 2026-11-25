@@ -12,7 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/anthonypoole/switchboard/internal/cloud"
+	"github.com/Anthony50102/ephor/internal/cloud"
 )
 
 // Spend, SSH, and cluster detail for the infrastructure list.

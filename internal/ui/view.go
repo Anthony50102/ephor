@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anthonypoole/switchboard/internal/agents"
-	"github.com/anthonypoole/switchboard/internal/core"
-	"github.com/anthonypoole/switchboard/internal/store"
+	"github.com/Anthony50102/ephor/internal/agents"
+	"github.com/Anthony50102/ephor/internal/core"
+	"github.com/Anthony50102/ephor/internal/store"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -96,7 +96,7 @@ func holdNoteFor(ss []core.Session, now time.Time) string {
 func (m Model) View() string {
 	w, h := m.width, m.height
 	if w < 60 || h < 12 {
-		return "Switchboard needs at least 60×12. Make the window bigger."
+		return "Ephor needs at least 60×12. Make the window bigger."
 	}
 	lay := m.layout()
 	bodyH, wide, sideW, centerW := lay.bodyH, lay.wide, lay.sideW, lay.centerW
@@ -273,7 +273,7 @@ func (m Model) viewHeader(w int) string {
 	now := m.opt.Now()
 	r := core.Roll(m.sessions, now)
 	inbox := len(m.sessionsIn(sideItem{kind: sideInbox}))
-	left := sBrand.Render(" s_ ") + " " + sBold.Render("switchboard")
+	left := sBrand.Render(" e_ ") + " " + sBold.Render("ephor")
 	if crumb := m.crumb(); crumb != "" {
 		left += sSubtle.Render(" / ") + sBlue.Render(crumb)
 	}
@@ -1708,7 +1708,7 @@ func (m Model) viewHelp(w int) []string {
 		keys  [][2]string
 	}{
 		{"MOVE", [][2]string{{"j / k", "down / up (supports counts, e.g. 10j, 5k)"}, {"gg / G", "top / bottom, or {count}G to jump to item N"}, {"h / l", "move between panels (also tab)"}, {"ctrl-h/j/k/l", "panels, then the tmux pane past the edge"}, {"j / k (middle)", "step through cards; enter opens or expands, esc collapses"}, {"space e / l / z", "toggle projects panel / sessions panel / both"}, {"space #", "toggle dim relative line numbers in the focused panel"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"ctrl-d / ctrl-u", "scroll the middle pane (ctrl-e / ctrl-y a line, supports count)"}}},
-		{"ACT", [][2]string{{"enter", "jump to the session's tmux window (or resume an offline session)"}, {"i", "type to the session without leaving"}, {"v / V", "dock the session beside Switchboard (or resume & dock offline) / undock from anywhere"}, {"R", "restore offline sessions from the previous tmux server (skips on hold)"}, {"x / X", "hold or resume finished work / hold with a reason note (auto-wakes on activity)"}, {"p / P", "park this session / all agent windows in the background agents session"}, {"o", "start Copilot in this project or thread (opens in agents)"}, {"y", "copy how to reach the highlighted machine or cluster"}, {"s", "open a shell on it in a new tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
+		{"ACT", [][2]string{{"enter", "jump to the session's tmux window (or resume an offline session)"}, {"i", "type to the session without leaving"}, {"v / V", "dock the session beside Ephor (or resume & dock offline) / undock from anywhere"}, {"R", "restore offline sessions from the previous tmux server (skips on hold)"}, {"x / X", "hold or resume finished work / hold with a reason note (auto-wakes on activity)"}, {"p / P", "park this session / all agent windows in the background agents session"}, {"o", "start Copilot in this project or thread (opens in agents)"}, {"y", "copy how to reach the highlighted machine or cluster"}, {"s", "open a shell on it in a new tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
 		{"PROJECTS", [][2]string{{"n", "new project"}, {"t", "new thread in this project"}, {"e", "describe what the project is for"}, {"r", "rename project or thread"}, {"d", "delete project or thread (or dismiss an offline session)"}}},
 		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":restore [all]", "restore active (or all, including held) offline sessions"}, {":reopen [name]", "bring back closed assigned sessions as offline so you can resume them"}, {":dismiss [all]", "dismiss one or all offline sessions in this scope"}, {":hold [note]", "put the selected session, thread, or project on hold"}, {":resume", "clear hold on the selected session, thread, or project"}, {":rnu / :nornu", "toggle or hide relative line numbers (also :set rnu / :set rnu!)"}, {":undock", "send the docked session back to its window"}, {":park / :park-all", "move one / all agent windows to the agents tmux session"}, {":help", "this screen"}}},
 		{"COLORS", [][2]string{{sAmber.Render("●"), "needs you: a question or approval is waiting"}, {sGreen.Render("●"), "working"}, {sCyan.Render("✓"), "follow up: active work that finished a turn and needs you"}, {sMuted.Render("‖"), "on hold: parked for later or blocked (auto-wakes when it runs again)"}, {sSubtle.Render("○"), "quiet: nothing new in a week"}, {sSubtle.Render("◌"), "offline: saved from the previous tmux session; enter/v/R restores"}, {sNewTag.Render("new"), "finished since you last opened the project"}}},

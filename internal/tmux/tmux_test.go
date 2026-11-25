@@ -56,7 +56,7 @@ func TestUndockRecreatesVanishedSession(t *testing.T) {
 		"new-session -d -P -F #{window_id} -s agents",
 		"break-pane -d -s %5 -t =agents: -n pt-train",
 		"kill-window -t @99",
-		"set-option -p -u -t %5 @switchboard-home",
+		"set-option -p -u -t %5 @ephor-home",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %q in:\n%s", want, joined)
@@ -133,7 +133,7 @@ func TestParkSingleAndMultiPaneAndRehome(t *testing.T) {
 		t.Fatalf("Rehome: %v", err)
 	}
 	wantHome := strings.Join([]string{"", "", "", "docked", "%0", PoolSession}, sep)
-	if !strings.Contains(strings.Join(calls, "\n"), "set-option -p -t %4 @switchboard-home "+wantHome) {
+	if !strings.Contains(strings.Join(calls, "\n"), "set-option -p -t %4 @ephor-home "+wantHome) {
 		t.Fatalf("Rehome calls = %v", calls)
 	}
 }

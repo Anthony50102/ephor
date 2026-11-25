@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anthonypoole/switchboard/internal/agents"
-	"github.com/anthonypoole/switchboard/internal/procs"
-	"github.com/anthonypoole/switchboard/internal/store"
-	"github.com/anthonypoole/switchboard/internal/tmux"
+	"github.com/Anthony50102/ephor/internal/agents"
+	"github.com/Anthony50102/ephor/internal/procs"
+	"github.com/Anthony50102/ephor/internal/store"
+	"github.com/Anthony50102/ephor/internal/tmux"
 )
 
 // StaleAfter is how long an unheld finished session stays "follow up" before it
@@ -94,7 +94,7 @@ type Sources struct {
 	Copilot *agents.Copilot
 	Claude  *agents.Claude
 	Started func(pid int) (time.Time, error)
-	// SkipPane is Switchboard's own pane, so its summarizer is not listed.
+	// SkipPane is Ephor's own pane, so its summarizer is not listed.
 	SkipPane string
 }
 

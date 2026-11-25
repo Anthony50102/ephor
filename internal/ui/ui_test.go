@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anthonypoole/switchboard/internal/agents"
-	"github.com/anthonypoole/switchboard/internal/cloud"
-	"github.com/anthonypoole/switchboard/internal/core"
-	"github.com/anthonypoole/switchboard/internal/store"
-	"github.com/anthonypoole/switchboard/internal/summary"
-	"github.com/anthonypoole/switchboard/internal/tmux"
+	"github.com/Anthony50102/ephor/internal/agents"
+	"github.com/Anthony50102/ephor/internal/cloud"
+	"github.com/Anthony50102/ephor/internal/core"
+	"github.com/Anthony50102/ephor/internal/store"
+	"github.com/Anthony50102/ephor/internal/summary"
+	"github.com/Anthony50102/ephor/internal/tmux"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -53,7 +53,7 @@ func newHarness(t *testing.T, ss []core.Session, inTmux bool) *harness {
 }
 
 // seedProject writes a project holding one session to the state file, as
-// another Switchboard instance would, and lets the model pick it up.
+// another Ephor instance would, and lets the model pick it up.
 func (h *harness) seedProject(name, key string, viewed time.Time) *store.Project {
 	var pid string
 	_, err := store.Update(h.path, func(st *store.State) error {
@@ -854,7 +854,7 @@ func TestDockAgent(t *testing.T) {
 
 	h.m.opt.Dock = nil
 	h.keys("v")
-	h.mustSee("needs Switchboard running inside tmux")
+	h.mustSee("needs Ephor running inside tmux")
 }
 
 func TestUXPolish(t *testing.T) {

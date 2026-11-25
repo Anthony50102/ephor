@@ -3,7 +3,7 @@ package ui
 import (
 	"strings"
 
-	"github.com/anthonypoole/switchboard/internal/core"
+	"github.com/Anthony50102/ephor/internal/core"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )

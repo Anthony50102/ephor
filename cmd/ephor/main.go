@@ -1,4 +1,4 @@
-// Command switchboard is a keyboard-first control panel for agent sessions in tmux.
+// Command ephor is a keyboard-first control panel for agent sessions in tmux.
 package main
 
 import (
@@ -14,29 +14,29 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/anthonypoole/switchboard/internal/cloud"
-	"github.com/anthonypoole/switchboard/internal/core"
-	"github.com/anthonypoole/switchboard/internal/store"
-	"github.com/anthonypoole/switchboard/internal/summary"
-	"github.com/anthonypoole/switchboard/internal/tmux"
-	"github.com/anthonypoole/switchboard/internal/ui"
+	"github.com/Anthony50102/ephor/internal/cloud"
+	"github.com/Anthony50102/ephor/internal/core"
+	"github.com/Anthony50102/ephor/internal/store"
+	"github.com/Anthony50102/ephor/internal/summary"
+	"github.com/Anthony50102/ephor/internal/tmux"
+	"github.com/Anthony50102/ephor/internal/ui"
 )
 
 var version = "dev"
 
 func main() {
-	fs := flag.NewFlagSet("switchboard", flag.ExitOnError)
+	fs := flag.NewFlagSet("ephor", flag.ExitOnError)
 	statePath := fs.String("state", store.DefaultPath(), "path to the state file")
 	showVersion := fs.Bool("version", false, "print version and exit")
-	summarizer := fs.String("summarizer", envOr("SWITCHBOARD_SUMMARIZER", "auto"),
-		"who writes project summaries: auto, copilot, off, or a shell command that reads the prompt on stdin (env SWITCHBOARD_SUMMARIZER)")
-	model := fs.String("summary-model", envOr("SWITCHBOARD_SUMMARY_MODEL", "claude-haiku-4.5"),
-		"model for the copilot summarizer (env SWITCHBOARD_SUMMARY_MODEL)")
-	liveFlag := fs.String("live", envOr("SWITCHBOARD_LIVE", "auto"),
-		"ask Azure Resource Graph whether listed resources still exist: auto (when az is installed), on, or off (env SWITCHBOARD_LIVE)")
+	summarizer := fs.String("summarizer", envOr("EPHOR_SUMMARIZER", "auto"),
+		"who writes project summaries: auto, copilot, off, or a shell command that reads the prompt on stdin (env EPHOR_SUMMARIZER)")
+	model := fs.String("summary-model", envOr("EPHOR_SUMMARY_MODEL", "claude-haiku-4.5"),
+		"model for the copilot summarizer (env EPHOR_SUMMARY_MODEL)")
+	liveFlag := fs.String("live", envOr("EPHOR_LIVE", "auto"),
+		"ask Azure Resource Graph whether listed resources still exist: auto (when az is installed), on, or off (env EPHOR_LIVE)")
 	every := fs.Duration("summary-every", ui.DefaultSummaryEvery, "shortest gap between automatic rewrites of one project's summary")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), `Usage: switchboard [flags] [command]
+		fmt.Fprintf(fs.Output(), `Usage: ephor [flags] [command]
 
 Commands:
   (none)                            open the control panel
@@ -52,7 +52,7 @@ Flags:
 	}
 	_ = fs.Parse(os.Args[1:])
 	if *showVersion {
-		fmt.Println("switchboard", version)
+		fmt.Println("ephor", version)
 		return
 	}
 
@@ -366,7 +366,7 @@ func fail(err error) {
 	if err == nil {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "switchboard:", err)
+	fmt.Fprintln(os.Stderr, "ephor:", err)
 	os.Exit(1)
 }
 
@@ -532,7 +532,7 @@ func checkLive(check cloud.Checker, res map[string][]cloud.Resource) map[string]
 	defer cancel()
 	live, err := cloud.Check(ctx, check, all)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "switchboard: cloud check skipped:", err)
+		fmt.Fprintln(os.Stderr, "ephor: cloud check skipped:", err)
 		return nil
 	}
 	return live

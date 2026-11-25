@@ -75,7 +75,7 @@ func LoadSnapshot(path string) (*Snapshot, error) {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	if s.Version > snapshotVersion {
-		return nil, fmt.Errorf("%s was written by a newer Switchboard (version %d)", path, s.Version)
+		return nil, fmt.Errorf("%s was written by a newer Ephor (version %d)", path, s.Version)
 	}
 	return s, nil
 }

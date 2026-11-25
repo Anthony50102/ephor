@@ -111,16 +111,16 @@ func AgentKind(args string) string {
 	return ""
 }
 
-func isSwitchboard(args string) bool {
+func isEphor(args string) bool {
 	f := strings.Fields(args)
 	if len(f) == 0 {
 		return false
 	}
-	return filepath.Base(f[0]) == "switchboard"
+	return filepath.Base(f[0]) == "ephor"
 }
 
 // FindAgent returns the shallowest agent process under root, skipping any
-// Switchboard subtree so transient summarizer sub-processes are never listed.
+// Ephor subtree so transient summarizer sub-processes are never listed.
 func (t Table) FindAgent(root int) (Proc, string, bool) {
 	queue := []int{root}
 	seen := map[int]bool{}
@@ -132,7 +132,7 @@ func (t Table) FindAgent(root int) (Proc, string, bool) {
 		}
 		seen[pid] = true
 		if p, ok := t.ByPID[pid]; ok {
-			if isSwitchboard(p.Args) {
+			if isEphor(p.Args) {
 				continue
 			}
 			if k := AgentKind(p.Args); k != "" {

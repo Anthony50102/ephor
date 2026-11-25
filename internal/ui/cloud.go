@@ -9,8 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/anthonypoole/switchboard/internal/cloud"
-	"github.com/anthonypoole/switchboard/internal/core"
+	"github.com/Anthony50102/ephor/internal/cloud"
+	"github.com/Anthony50102/ephor/internal/core"
 )
 
 type cloudMsg struct {

@@ -51,7 +51,7 @@ type Result struct {
 	Text string
 }
 
-// Info is what Switchboard knows about one agent session.
+// Info is what Ephor knows about one agent session.
 type Info struct {
 	Kind       string
 	ID         string

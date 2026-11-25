@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anthonypoole/switchboard/internal/tmux"
+	"github.com/Anthony50102/ephor/internal/tmux"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -15,7 +15,7 @@ const dockWidth = "55%"
 // when PaneExists is unavailable (such as in tests).
 const dockGrace = 10 * time.Second
 
-// Docking moves an agent's real tmux pane beside Switchboard, so you work
+// Docking moves an agent's real tmux pane beside Ephor, so you work
 // in the agent itself, then sends it back to its own window.
 
 func (m *Model) recoverDocked() {
@@ -38,7 +38,7 @@ func (m *Model) recoverDocked() {
 
 func (m *Model) toggleDock() tea.Cmd {
 	if m.opt.Dock == nil || m.opt.Undock == nil {
-		m.setErr(fmt.Errorf("docking an agent needs Switchboard running inside tmux"))
+		m.setErr(fmt.Errorf("docking an agent needs Ephor running inside tmux"))
 		return nil
 	}
 	m.recoverDocked()
@@ -74,7 +74,7 @@ func (m *Model) undockAny() {
 		return
 	}
 	if m.opt.Undock == nil {
-		m.setErr(fmt.Errorf("undocking an agent needs Switchboard running inside tmux"))
+		m.setErr(fmt.Errorf("undocking an agent needs Ephor running inside tmux"))
 		return
 	}
 	m.undock()
@@ -158,7 +158,7 @@ func (m *Model) parkOne() tea.Cmd {
 
 // parkAll moves every live agent window outside the agents pool into it,
 // leaving non-agent shells untouched and keeping any docked agent open beside
-// Switchboard (re-homed so it returns to agents when undocked).
+// Ephor (re-homed so it returns to agents when undocked).
 func (m *Model) parkAll() tea.Cmd {
 	if m.opt.Park == nil {
 		m.setErr(fmt.Errorf("parking sessions needs tmux"))

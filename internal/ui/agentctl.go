@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anthonypoole/switchboard/internal/core"
-	"github.com/anthonypoole/switchboard/internal/store"
-	"github.com/anthonypoole/switchboard/internal/tmux"
+	"github.com/Anthony50102/ephor/internal/core"
+	"github.com/Anthony50102/ephor/internal/store"
+	"github.com/Anthony50102/ephor/internal/tmux"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -91,7 +91,7 @@ func (m *Model) commitLaunchDir(v string) {
 	m.startInput(inLaunchTask, m.inputPID, m.inputTID, dir, "")
 }
 
-// launch opens a tmux window running Copilot. Switchboard picks the session
+// launch opens a tmux window running Copilot. Ephor picks the session
 // ID, so the session is filed under its project before Copilot starts.
 func (m *Model) launch(dir, task string) tea.Cmd {
 	pid, tid := m.inputPID, m.inputTID

@@ -56,18 +56,18 @@ type State struct {
 	NoRelativeNumbers bool                  `json:"noRelativeNumbers,omitempty"`
 }
 
-// DefaultPath is $XDG_STATE_HOME/switchboard/state.json or ~/.local/state/switchboard/state.json.
+// DefaultPath is $XDG_STATE_HOME/ephor/state.json or ~/.local/state/ephor/state.json.
 func DefaultPath() string {
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
 		home, _ := os.UserHomeDir()
 		base = filepath.Join(home, ".local", "state")
 	}
-	return filepath.Join(base, "switchboard", "state.json")
+	return filepath.Join(base, "ephor", "state.json")
 }
 
 // Load reads state. A missing file is an empty state; a corrupt file is an
-// error so Switchboard never overwrites groupings it could not read.
+// error so Ephor never overwrites groupings it could not read.
 func Load(path string) (*State, error) {
 	s := &State{Version: version, Assign: map[string]Assignment{}, Holds: map[string]Hold{}}
 	b, err := os.ReadFile(path)
@@ -78,10 +78,10 @@ func Load(path string) (*State, error) {
 		return nil, err
 	}
 	if err := json.Unmarshal(b, s); err != nil {
-		return nil, fmt.Errorf("read %s: %w (fix or move the file; Switchboard will not overwrite it)", path, err)
+		return nil, fmt.Errorf("read %s: %w (fix or move the file; Ephor will not overwrite it)", path, err)
 	}
 	if s.Version > version {
-		return nil, fmt.Errorf("%s was written by a newer Switchboard (version %d)", path, s.Version)
+		return nil, fmt.Errorf("%s was written by a newer Ephor (version %d)", path, s.Version)
 	}
 	if s.Assign == nil {
 		s.Assign = map[string]Assignment{}
@@ -225,7 +225,7 @@ func (s *State) DeleteThread(pid, tid string) {
 }
 
 // Update applies change to the latest state on disk and saves it, holding an
-// exclusive lock so concurrent Switchboard instances merge instead of
+// exclusive lock so concurrent Ephor instances merge instead of
 // overwriting each other. It returns the saved state.
 func Update(path string, change func(*State) error) (*State, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/anthonypoole/switchboard/internal/agents"
+	"github.com/Anthony50102/ephor/internal/agents"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )

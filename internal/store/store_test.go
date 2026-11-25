@@ -110,7 +110,7 @@ func TestSnapshotRebootAndSync(t *testing.T) {
 		t.Fatalf("after normal close: %+v", snap)
 	}
 
-	// Reboot to server B where user already opened session c before Switchboard started:
+	// Reboot to server B where user already opened session c before Ephor started:
 	// session a from dead server A moves to Recoverable instead of being clobbered.
 	if !snap.Sync("200:1700009999", []SavedSession{c}, t0.Add(time.Hour)) {
 		t.Fatal("new tmux server ID must transition snapshot")
