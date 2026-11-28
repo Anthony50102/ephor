@@ -224,6 +224,10 @@ func (m *Model) restoreOne(s core.Session, how restoreMode) tea.Cmd {
 	switch how {
 	case restoreDock:
 		m.docked, m.dockedTitle, m.dockedAt = pane, s.Title(), m.opt.Now()
+		if m.overlayMode() && m.focus == focusSessions {
+			m.focus = focusCenter
+			m.ensureCard()
+		}
 		m.setStatus(fmt.Sprintf("Restored and docked %s%s. V undocks from anywhere.", s.Title(), suffix))
 		return delayedRefreshCmd()
 	case restoreJump:

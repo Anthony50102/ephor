@@ -158,6 +158,7 @@ type Model struct {
 	helpOff       int
 	cardID        string          // highlighted card in the middle pane
 	expanded      map[string]bool // cards opened with enter
+	zen           bool            // full-width center with overlay side drawers
 	hideSide      bool
 	hideRight     bool
 	filter        string
@@ -237,7 +238,7 @@ func New(opt Options) Model {
 	if opt.LiveEvery == 0 {
 		opt.LiveEvery = DefaultLiveEvery
 	}
-	m := Model{opt: opt, st: opt.Store, input: ti, newSince: map[string]time.Time{}, expanded: map[string]bool{}, width: 120, height: 40}
+	m := Model{opt: opt, st: opt.Store, input: ti, newSince: map[string]time.Time{}, expanded: map[string]bool{}, width: wideEnough, height: 40}
 	m.sums = &summary.Cache{Projects: map[string]summary.Summary{}}
 	if opt.SummaryPath != "" {
 		m.sums = summary.LoadCache(opt.SummaryPath)
@@ -584,7 +585,12 @@ func (m Model) newCount(p store.Project) int {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		wasOverlay := m.overlayMode()
 		m.width, m.height = msg.Width, msg.Height
+		if !wasOverlay && m.overlayMode() && m.mode == modeNormal && m.focus != focusCenter {
+			m.focus = focusCenter
+			m.ensureCard()
+		}
 		return m, nil
 	case sessionsMsg:
 		m.refreshing = false
@@ -1505,6 +1511,46 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if ry < 0 || ry >= l.bodyH {
 			return m, nil
 		}
+		if l.overlay {
+			switch l.drawer {
+			case drawerLeft:
+				if msg.X < l.drawerW {
+					if idx, ok := m.sideItemAt(l.drawerW, l.bodyH, ry); ok {
+						m.setSide(idx)
+					}
+					return m, nil
+				}
+				m.focus = focusCenter
+				if c, ok := m.cardAt(l, ry); ok {
+					m.highlight(c)
+				} else {
+					m.ensureCard()
+				}
+				return m, nil
+			case drawerRight:
+				if msg.X >= m.width-l.drawerW {
+					if idx, ok := m.sessionAt(l.drawerW-2, l.bodyH, ry); ok {
+						m.selectSession(idx)
+					}
+					return m, nil
+				}
+				m.focus = focusCenter
+				if c, ok := m.cardAt(l, ry); ok {
+					m.highlight(c)
+				} else {
+					m.ensureCard()
+				}
+				return m, nil
+			default:
+				m.focus = focusCenter
+				if c, ok := m.cardAt(l, ry); ok {
+					m.highlight(c)
+				} else {
+					m.ensureCard()
+				}
+				return m, nil
+			}
+		}
 		switch {
 		case l.sideW > 0 && msg.X < l.sideW:
 			m.focus = focusSide
@@ -1533,6 +1579,17 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseButtonWheelUp:
 		step = -1
 	default:
+		return m, nil
+	}
+	if l.overlay {
+		switch {
+		case l.drawer == drawerLeft && msg.X < l.drawerW:
+			m.setSide(m.sideIdx + step)
+		case l.drawer == drawerRight && msg.X >= m.width-l.drawerW:
+			m.selectSession(m.sessIdx + step)
+		default:
+			m.scrollCenter(3 * step)
+		}
 		return m, nil
 	}
 	switch {

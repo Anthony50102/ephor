@@ -86,14 +86,19 @@ Keys follow LazyVim and the Snacks explorer, including Vim count prefixes
 (`10j`, `5k`, `5G`, `3ctrl-e`, `2L`, `2]d`). Press `space` for a which-key menu
 of actions.
 
-The screen has three panels: projects on the left, the brief in the middle,
-and sessions on the right. The brief is a column of cards. Focus it with `l`
-or `enter`, step through cards with `j` / `k`, and press `enter` to open a
-project or thread card or to expand any other card in place. Highlighting a
-session card also selects that session, so `i`, `m`, and `a` act on it. Hide
-the side panels the way you would in LazyVim: `space e` for the projects panel
-(like the explorer), `space l` for the sessions list, and `space z` for both.
-With the sessions panel hidden, the list moves into the bottom of the brief.
+The screen has three panels on wide terminals: projects on the left, the brief
+in the middle, and sessions on the right. The brief is a column of cards. Focus
+it with `l` or `enter`, step through cards with `j` / `k`, and press `enter` to
+open a project or thread card or to expand any other card in place. Highlighting
+a session card also selects that session, so `i`, `m`, and `a` act on it.
+
+On narrow terminals (including when an agent is docked beside Ephor), or
+whenever you toggle zen mode with `space z` (`:zen`), Ephor uses an **overlay
+drawer layout**: the middle brief gets 100% of the width and never reflows,
+while `h` / `space e` slides the projects drawer over the left edge and `l` /
+`space l` slides the sessions drawer over the right edge (`esc` or clicking
+outside closes the drawer). On wide screens outside zen mode, `space e` and
+`space l` toggle the pinned side panels.
 
 | Key | Action |
 | --- | --- |

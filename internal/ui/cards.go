@@ -247,24 +247,57 @@ func (m Model) enterCard() (tea.Model, tea.Cmd) {
 // ---- panels ----
 
 func (m *Model) toggleSide() {
+	if m.overlayMode() {
+		if m.focus == focusSide {
+			m.focus = focusCenter
+			m.ensureCard()
+		} else {
+			m.focus = focusSide
+		}
+		return
+	}
 	m.hideSide = !m.hideSide
 	m.fixFocus()
 }
 
 func (m *Model) toggleRight() {
+	if m.overlayMode() {
+		if m.focus == focusSessions {
+			m.focus = focusCenter
+			m.ensureCard()
+		} else {
+			m.focus = focusSessions
+		}
+		return
+	}
 	m.hideRight = !m.hideRight
 	m.fixFocus()
 }
 
-// toggleZen hides both side panels, or shows both when they are hidden.
+// toggleZen switches between the 3-column split and full-width overlay drawer
+// mode on wide terminals. On narrow terminals overlay mode is always active,
+// so space z dismisses any open drawer.
 func (m *Model) toggleZen() {
-	hide := !(m.hideSide && m.hideRight)
-	m.hideSide, m.hideRight = hide, hide
-	m.fixFocus()
+	if m.width < wideEnough {
+		if m.focus != focusCenter {
+			m.focus = focusCenter
+			m.ensureCard()
+		}
+		m.setStatus("Overlay layout is automatic on narrow screens (h/l or space e/l open drawers).")
+		return
+	}
+	m.zen = !m.zen
+	if m.zen {
+		m.focus = focusCenter
+		m.ensureCard()
+	} else {
+		m.hideSide, m.hideRight = false, false
+		m.fixFocus()
+	}
 }
 
 func (m *Model) fixFocus() {
-	if m.focus == focusSide && m.hideSide {
+	if !m.overlayMode() && m.focus == focusSide && m.hideSide {
 		m.focus = focusCenter
 	}
 	if m.focus == focusCenter {
@@ -274,15 +307,14 @@ func (m *Model) fixFocus() {
 }
 
 // focusLeft and focusRight move between panes like ctrl-w h and ctrl-w l.
-// With the right panel hidden, the session list sits inside the middle pane
-// and still takes focus.
+// In overlay mode they open or close the left/right drawers over the center.
 func (m *Model) focusLeft() {
 	switch m.focus {
 	case focusSessions:
 		m.focus = focusCenter
 		m.ensureCard()
 	case focusCenter:
-		if !m.hideSide {
+		if m.overlayMode() || !m.hideSide {
 			m.focus = focusSide
 		}
 	}
@@ -300,15 +332,24 @@ func (m *Model) focusRight() {
 
 // navigate is ctrl-h/j/k/l, as vim-tmux-navigator does it in Vim: move
 // between panels, and past the edge move to the neighboring tmux pane.
+// In overlay mode, closing an open drawer takes one step; from the full-width
+// center brief, ctrl-l jumps straight to a docked tmux pane.
 func (m *Model) navigate(a action) {
-	wide := m.layout().wide
+	l := m.layout()
 	edge := false
 	switch a {
 	case aNavLeft:
-		edge = m.focus == focusSide || m.focus == focusCenter && m.hideSide
+		if l.overlay {
+			edge = m.focus != focusSessions
+		} else {
+			edge = m.focus == focusSide || m.focus == focusCenter && m.hideSide
+		}
 	case aNavRight:
-		// When narrow the session list sits below the cards, not beside.
-		edge = m.focus == focusSessions || m.focus == focusCenter && !wide
+		if l.overlay {
+			edge = m.focus != focusSide
+		} else {
+			edge = m.focus == focusSessions || m.focus == focusCenter && !l.wide
+		}
 	default:
 		edge = true
 	}

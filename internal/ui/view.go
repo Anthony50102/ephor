@@ -12,6 +12,7 @@ import (
 	"github.com/Anthony50102/ephor/internal/core"
 	"github.com/Anthony50102/ephor/internal/store"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -21,16 +22,61 @@ const (
 	wideEnough = 124
 )
 
+type drawerSide int
+
+const (
+	drawerNone drawerSide = iota
+	drawerLeft
+	drawerRight
+)
+
 type layout struct {
 	bodyH, sideW, centerW int
 	wide                  bool
+	overlay               bool
+	drawer                drawerSide
+	drawerW               int
+}
+
+func (m Model) overlayMode() bool {
+	return m.zen || m.width < wideEnough
+}
+
+func (m Model) activeDrawer() drawerSide {
+	if !m.overlayMode() {
+		return drawerNone
+	}
+	if m.mode == modeOrganize || m.mode == modeHelp || m.replying() {
+		return drawerNone
+	}
+	switch m.focus {
+	case focusSide:
+		return drawerLeft
+	case focusSessions:
+		return drawerRight
+	}
+	return drawerNone
 }
 
 func (m Model) layout() layout {
-	l := layout{bodyH: m.height - 2, wide: m.width >= wideEnough && !m.hideRight, sideW: sideWide}
-	if m.width < 100 {
-		l.sideW = sideNarrow
+	l := layout{bodyH: m.height - 2}
+	if m.overlayMode() {
+		l.overlay = true
+		l.centerW = m.width
+		l.drawer = m.activeDrawer()
+		switch l.drawer {
+		case drawerLeft:
+			l.drawerW = min(32, max(24, m.width*2/5))
+		case drawerRight:
+			l.drawerW = min(46, max(34, m.width*3/5))
+		}
+		if l.drawerW > m.width-8 {
+			l.drawerW = max(18, m.width-8)
+		}
+		return l
 	}
+	l.wide = !m.hideRight
+	l.sideW = sideWide
 	l.centerW = m.width - l.sideW - 1
 	if m.hideSide {
 		l.sideW, l.centerW = 0, m.width
@@ -52,7 +98,7 @@ func (m Model) centerPage(l layout) page {
 	if m.replying() {
 		return page{lines: m.viewScreen(l.centerW-4, l.bodyH), selLine: -1}
 	}
-	return m.viewCenter(l.centerW-4, !l.wide)
+	return m.viewCenter(l.centerW-4, !l.wide && !l.overlay)
 }
 
 // clampOff keeps a scroll offset between the top and the point where the
@@ -197,26 +243,45 @@ func (m Model) View() string {
 	} else {
 		center = box(center, centerW, bodyH)
 	}
-	sep := paint(sLine.Render("│"), cPanel)
-	var side []string
-	if sideW > 0 {
-		side = box(m.viewSide(sideW, bodyH), sideW, bodyH)
-	}
-
 	rows := make([]string, bodyH)
-	var right []string
-	if wide {
-		right = box(indent(m.viewSessionsPane(rightW-2, bodyH), 1), rightW, bodyH)
-	}
-	for i := 0; i < bodyH; i++ {
-		r := paint(center[i], cBg)
+	if lay.overlay && lay.drawer != drawerNone {
+		dw := lay.drawerW
+		backW := w - dw - 1
+		border := paint(sBlue.Render("┃"), cPanel)
+		switch lay.drawer {
+		case drawerLeft:
+			panel := box(m.viewSide(dw, bodyH), dw, bodyH)
+			for i := 0; i < bodyH; i++ {
+				back := pad(ansi.Strip(ansi.Cut(center[i], dw+1, w)), backW)
+				rows[i] = paint(panel[i], cPanel) + border + paint(sSubtle.Render(back), cDeep)
+			}
+		case drawerRight:
+			panel := box(indent(m.viewSessionsPane(dw-2, bodyH), 1), dw, bodyH)
+			for i := 0; i < bodyH; i++ {
+				back := pad(ansi.Strip(ansi.Cut(center[i], 0, backW)), backW)
+				rows[i] = paint(sSubtle.Render(back), cDeep) + border + paint(panel[i], cPanel)
+			}
+		}
+	} else {
+		sep := paint(sLine.Render("│"), cPanel)
+		var side []string
 		if sideW > 0 {
-			r = paint(side[i], cPanel) + sep + r
+			side = box(m.viewSide(sideW, bodyH), sideW, bodyH)
 		}
+		var right []string
 		if wide {
-			r += sep + paint(right[i], cPanel)
+			right = box(indent(m.viewSessionsPane(rightW-2, bodyH), 1), rightW, bodyH)
 		}
-		rows[i] = r
+		for i := 0; i < bodyH; i++ {
+			r := paint(center[i], cBg)
+			if sideW > 0 {
+				r = paint(side[i], cPanel) + sep + r
+			}
+			if wide {
+				r += sep + paint(right[i], cPanel)
+			}
+			rows[i] = r
+		}
 	}
 	if m.pending != "" && m.mode == modeNormal {
 		wk := m.whichKey(w)
@@ -276,6 +341,9 @@ func (m Model) viewHeader(w int) string {
 	left := sBrand.Render(" e_ ") + " " + sBold.Render("ephor")
 	if crumb := m.crumb(); crumb != "" {
 		left += sSubtle.Render(" / ") + sBlue.Render(crumb)
+	}
+	if m.zen && m.width >= wideEnough {
+		left += "  " + sPill.Render(" zen ")
 	}
 	if m.docked != "" {
 		left += "  " + sTeal.Background(cRaised).Render(" ⇄ "+trunc(m.dockedTitle, 18)+" ")
@@ -343,17 +411,28 @@ func (m Model) viewFooter(w int) string {
 	case m.mode == modeOrganize:
 		keys = [][2]string{{"j/k", "move"}, {"enter", "place here"}, {"t", "new thread"}, {"n", "new project"}, {"esc", "cancel"}}
 	case m.focus == focusSide:
-		keys = [][2]string{{"j/k", "browse"}, {"enter/l", "brief"}, {"x", m.holdHint()}, {"H/L", "projects"}, {"]d", "needs you"}, {"n", "new project"}}
-		if len(m.offlineIn(m.scope())) > 0 {
-			keys = append([][2]string{{"j/k", "browse"}, {"R", "restore"}, {"enter/l", "brief"}, {"x", m.holdHint()}, {"H/L", "projects"}}, [2]string{"n", "new project"})
+		if m.overlayMode() {
+			keys = [][2]string{{"j/k", "browse"}, {"enter", "open"}, {"esc", "close"}, {"x", m.holdHint()}, {"n", "new project"}}
+			if len(m.offlineIn(m.scope())) > 0 {
+				keys = [][2]string{{"j/k", "browse"}, {"R", "restore"}, {"enter", "open"}, {"esc", "close"}, {"x", m.holdHint()}}
+			}
+		} else {
+			keys = [][2]string{{"j/k", "browse"}, {"enter/l", "brief"}, {"x", m.holdHint()}, {"H/L", "projects"}, {"]d", "needs you"}, {"n", "new project"}}
+			if len(m.offlineIn(m.scope())) > 0 {
+				keys = append([][2]string{{"j/k", "browse"}, {"R", "restore"}, {"enter/l", "brief"}, {"x", m.holdHint()}, {"H/L", "projects"}}, [2]string{"n", "new project"})
+			}
 		}
 	case m.focus == focusCenter:
 		keys = m.centerFooterKeys()
 	default:
+		closeHint := [2]string{"h", "brief"}
+		if m.overlayMode() {
+			closeHint = [2]string{"esc", "close"}
+		}
 		if sel, ok := m.selected(); ok && sel.Offline {
-			keys = [][2]string{{"j/k", "select"}, {"enter", "resume"}, {"v", "dock & resume"}, {"R", "bg restore"}, {"x", m.holdHint()}, {"d", "dismiss"}, {"h", "brief"}}
+			keys = [][2]string{{"j/k", "select"}, {"enter", "resume"}, {"v", "dock & resume"}, {"R", "bg restore"}, {"x", m.holdHint()}, {"d", "dismiss"}, closeHint}
 		} else {
-			keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"v", "dock"}, {"i", "answer"}, {"x", m.holdHint()}, {"m", "move"}, {"/", "filter"}, {"h", "brief"}}
+			keys = [][2]string{{"j/k", "select"}, {"enter", "jump"}, {"v", "dock"}, {"i", "answer"}, {"x", m.holdHint()}, {"m", "move"}, {"/", "filter"}, closeHint}
 		}
 	}
 	if m.docked != "" && m.mode != modeOrganize {
@@ -474,7 +553,14 @@ func (m Model) centerFooterKeys() [][2]string {
 			keys = append(keys, [2]string{"enter", "expand"})
 		}
 	}
-	keys = append(keys, [2]string{"h/l", "panels"}, [2]string{"space z", "zen"})
+	if m.overlayMode() {
+		keys = append(keys, [2]string{"h", "projects"}, [2]string{"l", "sessions"})
+		if m.zen && m.width >= wideEnough {
+			keys = append(keys, [2]string{"space z", "3-col"})
+		}
+	} else {
+		keys = append(keys, [2]string{"h/l", "panels"}, [2]string{"space z", "zen"})
+	}
 	return keys
 }
 
@@ -530,7 +616,11 @@ func (m Model) buildSide(w, h int) ([]string, []int) {
 		push(" "+row, i)
 	}
 	push("", -1)
-	push(" "+kicker.Render("WORKSPACE"), -1)
+	if m.overlayMode() {
+		push(spread(" "+kicker.Render("WORKSPACE"), sSubtle.Render("esc "), w), -1)
+	} else {
+		push(" "+kicker.Render("WORKSPACE"), -1)
+	}
 	for i, it := range m.side {
 		switch it.kind {
 		case sideOverview:
@@ -1707,10 +1797,10 @@ func (m Model) viewHelp(w int) []string {
 		title string
 		keys  [][2]string
 	}{
-		{"MOVE", [][2]string{{"j / k", "down / up (supports counts, e.g. 10j, 5k)"}, {"gg / G", "top / bottom, or {count}G to jump to item N"}, {"h / l", "move between panels (also tab)"}, {"ctrl-h/j/k/l", "panels, then the tmux pane past the edge"}, {"j / k (middle)", "step through cards; enter opens or expands, esc collapses"}, {"space e / l / z", "toggle projects panel / sessions panel / both"}, {"space #", "toggle dim relative line numbers in the focused panel"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"ctrl-d / ctrl-u", "scroll the middle pane (ctrl-e / ctrl-y a line, supports count)"}}},
+		{"MOVE", [][2]string{{"j / k", "down / up (supports counts, e.g. 10j, 5k)"}, {"gg / G", "top / bottom, or {count}G to jump to item N"}, {"h / l", "move between panels, or open/close side drawers in zen/narrow layout"}, {"ctrl-h/j/k/l", "panels/drawers, then the tmux pane past the edge (ctrl-l jumps to a docked agent)"}, {"j / k (middle)", "step through cards; enter opens or expands, esc collapses"}, {"space e / l / z", "toggle projects / sessions panel (or overlay drawer) / zen overlay mode"}, {"space #", "toggle dim relative line numbers in the focused panel"}, {"H / L", "previous / next project"}, {"]d / [d", "next / previous session that needs you"}, {"ctrl-d / ctrl-u", "scroll the middle pane (ctrl-e / ctrl-y a line, supports count)"}}},
 		{"ACT", [][2]string{{"enter", "jump to the session's tmux window (or resume an offline session)"}, {"i", "type to the session without leaving"}, {"v / V", "dock the session beside Ephor (or resume & dock offline) / undock from anywhere"}, {"R", "restore offline sessions from the previous tmux server (skips on hold)"}, {"x / X", "hold or resume finished work / hold with a reason note (auto-wakes on activity)"}, {"p / P", "park this session / all agent windows in the background agents session"}, {"o", "start Copilot in this project or thread (opens in agents)"}, {"y", "copy how to reach the highlighted machine or cluster"}, {"s", "open a shell on it in a new tmux window"}, {"m", "move the session to a project"}, {"a", "accept the suggested project"}, {"/", "filter sessions; esc clears"}, {"space space", "find any session"}, {"u", "refresh now (also every 3s)"}}},
 		{"PROJECTS", [][2]string{{"n", "new project"}, {"t", "new thread in this project"}, {"e", "describe what the project is for"}, {"r", "rename project or thread"}, {"d", "delete project or thread (or dismiss an offline session)"}}},
-		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":restore [all]", "restore active (or all, including held) offline sessions"}, {":reopen [name]", "bring back closed assigned sessions as offline so you can resume them"}, {":dismiss [all]", "dismiss one or all offline sessions in this scope"}, {":hold [note]", "put the selected session, thread, or project on hold"}, {":resume", "clear hold on the selected session, thread, or project"}, {":rnu / :nornu", "toggle or hide relative line numbers (also :set rnu / :set rnu!)"}, {":undock", "send the docked session back to its window"}, {":park / :park-all", "move one / all agent windows to the agents tmux session"}, {":help", "this screen"}}},
+		{"COMMANDS", [][2]string{{"space", "menu of actions (which-key)"}, {":q", "quit (also q)"}, {":new name", "new project"}, {":zen", "toggle zen overlay drawer layout (automatic on narrow screens)"}, {":restore [all]", "restore active (or all, including held) offline sessions"}, {":reopen [name]", "bring back closed assigned sessions as offline so you can resume them"}, {":dismiss [all]", "dismiss one or all offline sessions in this scope"}, {":hold [note]", "put the selected session, thread, or project on hold"}, {":resume", "clear hold on the selected session, thread, or project"}, {":rnu / :nornu", "toggle or hide relative line numbers (also :set rnu / :set rnu!)"}, {":undock", "send the docked session back to its window"}, {":park / :park-all", "move one / all agent windows to the agents tmux session"}, {":help", "this screen"}}},
 		{"COLORS", [][2]string{{sAmber.Render("●"), "needs you: a question or approval is waiting"}, {sGreen.Render("●"), "working"}, {sCyan.Render("✓"), "follow up: active work that finished a turn and needs you"}, {sMuted.Render("‖"), "on hold: parked for later or blocked (auto-wakes when it runs again)"}, {sSubtle.Render("○"), "quiet: nothing new in a week"}, {sSubtle.Render("◌"), "offline: saved from the previous tmux session; enter/v/R restores"}, {sNewTag.Render("new"), "finished since you last opened the project"}}},
 	}
 	lines := []string{"", sKicker.Render("HELP"), sTitle.Render("Keys"), ""}

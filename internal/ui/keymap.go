@@ -107,9 +107,9 @@ var prefixes = map[string][]keyHint{
 		{"R", "restore offline sessions from the previous tmux server", aRestore},
 		{"n", "new project", aNewProject},
 		{"t", "new thread", aNewThread},
-		{"e", "toggle projects panel", aToggleSide},
-		{"l", "toggle sessions panel", aToggleRight},
-		{"z", "zen: hide both panels", aZen},
+		{"e", "toggle projects panel (or overlay drawer)", aToggleSide},
+		{"l", "toggle sessions panel (or overlay drawer)", aToggleRight},
+		{"z", "zen: full-width brief with overlay drawers", aZen},
 		{"#", "toggle relative line numbers", aToggleRelNum},
 		{"r", "rename", aRename},
 		{"d", "delete", aDelete},
@@ -339,6 +339,9 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 	case aDelete:
 		m.startDelete()
 	case aFilter:
+		if m.overlayMode() {
+			m.focus = focusSessions
+		}
 		m.startInput(inFilter, "", "", "", m.filter)
 	case aFind:
 		m.setSide(0)
@@ -350,8 +353,16 @@ func (m Model) do(a action) (tea.Model, tea.Cmd) {
 			m.followCard()
 			return m, nil
 		}
-		m.filter = ""
-		m.syncSelection()
+		if m.filter != "" {
+			m.filter = ""
+			m.syncSelection()
+			return m, nil
+		}
+		if m.overlayMode() && m.focus != focusCenter {
+			m.focus = focusCenter
+			m.ensureCard()
+			return m, nil
+		}
 	case aRefresh:
 		if !m.refreshing {
 			m.refreshing = true
@@ -441,6 +452,8 @@ func (m Model) runCommand(line string) (tea.Model, tea.Cmd) {
 		}
 	case "undock":
 		m.undockAny()
+	case "zen":
+		m.toggleZen()
 	case "park":
 		if arg == "all" {
 			return m, m.parkAll()

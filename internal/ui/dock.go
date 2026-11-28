@@ -61,6 +61,10 @@ func (m *Model) toggleDock() tea.Cmd {
 		return nil
 	}
 	m.docked, m.dockedTitle, m.dockedAt = s.Pane.PaneID, s.Title(), time.Time{}
+	if m.overlayMode() && m.focus == focusSessions {
+		m.focus = focusCenter
+		m.ensureCard()
+	}
 	m.setStatus("Docked " + s.Title() + ". Pane keys move between it and here; V undocks from anywhere.")
 	return nil
 }

@@ -689,12 +689,12 @@ func TestCardsAndPanels(t *testing.T) {
 	}
 	h.mustSee("SESSIONS")
 	h.keys("space", "z")
-	if h.m.hideSide || h.m.hideRight {
-		t.Fatal("space z with both hidden should show both")
+	if !h.m.zen || !h.m.layout().overlay || h.m.layout().centerW != 160 {
+		t.Fatalf("space z should enter full-width zen overlay mode: zen=%v lay=%+v", h.m.zen, h.m.layout())
 	}
 	h.keys("space", "z")
-	if !h.m.hideSide || !h.m.hideRight {
-		t.Fatal("space z should hide both")
+	if h.m.zen || h.m.hideSide || h.m.hideRight || !h.m.layout().wide {
+		t.Fatalf("space z again should restore 3-column split: zen=%v hide=(%v,%v) lay=%+v", h.m.zen, h.m.hideSide, h.m.hideRight, h.m.layout())
 	}
 }
 
@@ -847,9 +847,14 @@ func TestDockAgent(t *testing.T) {
 	}
 	h.send(tea.WindowSizeMsg{Width: 98, Height: 50})
 	h.m.focus = focusCenter
-	h.keys("ctrl+l", "ctrl+h", "ctrl+h")
-	if h.m.focus != focusSide || strings.Join(moved, "") != "RRL" {
-		t.Fatalf("narrow: focus %d, moved %q", h.m.focus, moved)
+	h.keys("ctrl+l", "ctrl+h")
+	if h.m.focus != focusCenter || strings.Join(moved, "") != "RRL" {
+		t.Fatalf("narrow overlay center: focus %d, moved %q", h.m.focus, moved)
+	}
+	// With the right drawer open, ctrl+h closes the drawer before stepping to tmux.
+	h.keys("l", "ctrl+h", "ctrl+h")
+	if h.m.focus != focusCenter || strings.Join(moved, "") != "RRLL" {
+		t.Fatalf("narrow overlay drawer: focus %d, moved %q", h.m.focus, moved)
 	}
 
 	h.m.opt.Dock = nil
@@ -899,11 +904,17 @@ func TestUXPolish(t *testing.T) {
 		t.Fatalf("esc should close help, got %d", h.m.mode)
 	}
 
-	// Narrow/docked width uses compact sidebar legend and fits within width.
+	// Narrow/docked width uses full-width center by default, and its left
+	// overlay drawer fits cleanly within width.
 	h.send(tea.WindowSizeMsg{Width: 84, Height: 30})
 	v := h.screen()
-	if !strings.Contains(v, "● wait   ● work") || strings.Contains(v, "creat│") {
-		t.Fatalf("expected compact narrow sidebar without mid-word clipping, got:\n%s", v)
+	if strings.Contains(v, "WORKSPACE") {
+		t.Fatalf("narrow overlay mode should start on full-width brief without left drawer open:\n%s", v)
+	}
+	h.keys("h") // open left overlay drawer
+	v = h.screen()
+	if !strings.Contains(v, "WORKSPACE") || strings.Contains(v, "creat┃") {
+		t.Fatalf("expected clean left overlay drawer without mid-word clipping, got:\n%s", v)
 	}
 	for i, line := range strings.Split(v, "\n") {
 		if w := ansi.StringWidth(line); w > 84 {
@@ -1509,5 +1520,82 @@ func TestOfflineRestoreAndDismissWorkflow(t *testing.T) {
 	loaded, err = store.LoadSnapshot(snapPath)
 	if err != nil || len(loaded.Recoverable) != 1 || loaded.Recoverable[0].Key != offActive.Key {
 		t.Fatalf(":reopen should re-add closed assigned session to snapshot.json, got %+v err=%v", loaded.Recoverable, err)
+	}
+}
+
+func TestOverlayDrawerZenMode(t *testing.T) {
+	s1 := session("s1", "pt train", agents.Working, time.Minute, 1)
+	s2 := session("s2", "pt serving", agents.Ready, 5*time.Minute, 2)
+	h := newHarness(t, []core.Session{s1, s2}, false)
+	h.seedProject("Nabu", "s1", now)
+	h.m.st.AssignSession(s2.Key, h.m.st.Projects[0].ID, "", "", now)
+
+	// On a wide screen, space z toggles full-width zen overlay mode with zero center reflow.
+	h.keys("space", "z")
+	if !h.m.zen || !h.m.layout().overlay || h.m.layout().centerW != 160 || h.m.focus != focusCenter {
+		t.Fatalf("zen layout = %+v focus=%d", h.m.layout(), h.m.focus)
+	}
+	h.mustSee("zen", "h projects", "l sessions")
+
+	// Opening the left drawer keeps centerW == 160 (overlay, not squeezing) and exact row widths.
+	h.keys("space", "e")
+	if h.m.layout().drawer != drawerLeft || h.m.layout().centerW != 160 {
+		t.Fatalf("left drawer layout = %+v", h.m.layout())
+	}
+	vLeft := h.screen()
+	if !strings.Contains(vLeft, "WORKSPACE") || !strings.Contains(vLeft, "┃") {
+		t.Fatalf("expected left overlay drawer with border, got:\n%s", vLeft)
+	}
+	for i, line := range strings.Split(vLeft, "\n") {
+		if w := ansi.StringWidth(line); w != 160 {
+			t.Fatalf("left drawer row %d width = %d, want 160", i, w)
+		}
+	}
+
+	// Switching to the right drawer replaces the left drawer (only one open at a time).
+	h.keys("space", "l")
+	if h.m.layout().drawer != drawerRight || h.m.layout().centerW != 160 {
+		t.Fatalf("right drawer layout = %+v", h.m.layout())
+	}
+	vRight := h.screen()
+	if !strings.Contains(vRight, "Sessions") || !strings.Contains(vRight, "┃") {
+		t.Fatalf("expected right overlay drawer with border, got:\n%s", vRight)
+	}
+	for i, line := range strings.Split(vRight, "\n") {
+		if w := ansi.StringWidth(line); w != 160 {
+			t.Fatalf("right drawer row %d width = %d, want 160", i, w)
+		}
+	}
+
+	// Clicking outside the right drawer dismisses it back to center.
+	h.send(tea.MouseMsg{X: 10, Y: 5, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	if h.m.focus != focusCenter || h.m.layout().drawer != drawerNone {
+		t.Fatalf("click outside drawer should dismiss it: focus=%d drawer=%d", h.m.focus, h.m.layout().drawer)
+	}
+
+	// Docking from the right drawer closes the drawer so the brief sits cleanly beside the agent.
+	h.m.opt.Dock = func(string) error { return nil }
+	h.m.opt.Undock = func(string) error { return nil }
+	h.keys("l", "v")
+	if h.m.docked == "" || h.m.focus != focusCenter {
+		t.Fatalf("docking from overlay sessions drawer should dock and close drawer: docked=%q focus=%d", h.m.docked, h.m.focus)
+	}
+
+	// Esc dismisses an open drawer (and clears filter first if set).
+	h.keys("h")
+	if h.m.layout().drawer != drawerLeft {
+		t.Fatalf("h from center should open left drawer, got %+v", h.m.layout())
+	}
+	h.keys("esc")
+	if h.m.layout().drawer != drawerNone || h.m.focus != focusCenter {
+		t.Fatalf("esc should close left drawer: focus=%d drawer=%d", h.m.focus, h.m.layout().drawer)
+	}
+
+	// :zen toggles back to 3-column split.
+	h.keys(":")
+	h.typeText("zen")
+	h.keys("enter")
+	if h.m.zen || !h.m.layout().wide {
+		t.Fatalf(":zen should exit zen overlay mode back to 3-column split: zen=%v lay=%+v", h.m.zen, h.m.layout())
 	}
 }
